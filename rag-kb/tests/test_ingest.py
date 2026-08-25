@@ -111,10 +111,17 @@ class _RaisingOcr:
         raise OCRUnavailableError("OCR 引擎不可用")
 
 
+class _ValueErrorOcr:
+    """OCR 抛非 OCRUnavailableError 的异常（如 PIL 解码坏图字节）。"""
+
+    def extract_text(self, data):
+        raise ValueError("corrupt image bytes")
+
+
 def _pipeline(**overrides):
     kwargs = dict(parser=_FakeParser(), chunker=_FakeChunker(),
                   embedder=_FakeEmbedder(), indexer=_FakeIndexer(),
-                  ocr=None, pg=_FakePg(), minio=_FakeMinio())
+                  ocr=_FakeOcr(), pg=_FakePg(), minio=_FakeMinio())
     kwargs.update(overrides)
     return IngestPipeline(**kwargs)
 
@@ -155,6 +162,32 @@ def test_ingest_ocr_unavailable_keeps_text_but_stores_image():
     pipe.ingest("/tmp/fake.pdf", doc_id="d1", source="fake.pdf")
     assert pipe._indexer.chunks[0].text == "产品型号 A-100 单价 99 元。"
     assert minio.images == [("img1", b"png-bytes")]
+
+
+def test_ingest_any_ocr_exception_keeps_pipeline_and_stores_image():
+    """OCR 抛任意异常（如 ValueError）不阻断流水线，原图仍入库（spec §8）。"""
+    minio = _FakeMinio()
+    pipe = _pipeline(parser=_FakeImageParser(), ocr=_ValueErrorOcr(), minio=minio)
+    pipe.ingest("/tmp/fake.pdf", doc_id="d1", source="fake.pdf")
+    assert pipe._indexer.chunks[0].text == "产品型号 A-100 单价 99 元。"
+    assert minio.images == [("img1", b"png-bytes")]
+
+
+def test_ingest_applies_cleaning_before_chunking():
+    class _DirtyParser(_FakeParser):
+        def parse(self, path, doc_id, source, **meta):
+            doc = super().parse(path, doc_id, source, **meta)
+            doc.text = "产品型号 A-100 单价 99 元。\n第 1 页 / 共 3 页"
+            return doc
+
+    pipe = _pipeline(parser=_DirtyParser(), chunker=_FakeChunker(),
+                     embedder=_FakeEmbedder(), indexer=_FakeIndexer(),
+                     ocr=_FakeOcr(), pg=_FakePg(), minio=_FakeMinio())
+    pipe.ingest("/tmp/fake.pdf", doc_id="d1", source="fake.pdf",
+                version="v1.0", effective_date="2026-01-15")
+    idx = pipe._indexer
+    assert len(idx.chunks) == 1
+    assert "第 1 页" not in idx.chunks[0].text
 
 
 def test_ingest_skips_version_registration_when_no_version():

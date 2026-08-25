@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import uuid
 
 from ragkb.chunker import Chunker
@@ -8,7 +9,7 @@ from ragkb.embedder import Embedder
 from ragkb.indexers import QdrantIndexer
 from ragkb.indexers.minio_store import MinioImageStore
 from ragkb.indexers.pg_table_indexer import PgTableIndexer
-from ragkb.ocr import OCRClient, OCRUnavailableError
+from ragkb.ocr import OCRClient
 from ragkb.parsers import parse_document
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class IngestPipeline:
             settings.chunk_max_chars)
         self._embedder = embedder or Embedder(settings.embed_model)
         self._indexer = indexer or QdrantIndexer(settings)
-        self._ocr = ocr
+        self._ocr = ocr if ocr is not None else OCRClient(settings.ocr_lang)
         self._pg = pg or PgTableIndexer(settings.pg_dsn)
         self._minio = minio or MinioImageStore(settings)
 
@@ -35,7 +36,7 @@ class IngestPipeline:
                department: str = "", version: str = "", effective_date: str = "",
                parse_images: bool = True):
         doc_id = doc_id or str(uuid.uuid4())
-        source = source or path.rsplit("/", 1)[-1]
+        source = source or os.path.basename(path)
         logger.info("ingest %s (%s)", source, doc_id)
 
         # 兼容两种解析协议：模块级 parse_document 函数，或解析器对象 .parse()
@@ -50,13 +51,18 @@ class IngestPipeline:
             for img in parsed.images:
                 try:
                     text = self._ocr.extract_text(img.data)
-                except OCRUnavailableError:
+                except Exception:  # 任何 OCR 失败都不阻断流水线（spec §8）
+                    logger.warning("OCR 失败，跳过图片 %s", img.image_id)
                     text = ""
                 if text:
                     ocr_texts.append(text)
                 self._minio.put(img.image_id, img.data)
             if ocr_texts:
                 parsed.text = (parsed.text + "\n\n" + "\n".join(ocr_texts)).strip()
+
+        # 清洗：去页眉页脚/乱码/归一空白（spec §4.2）
+        from ragkb.cleaners import clean_text
+        parsed.text = clean_text(parsed.text)
 
         chunks = self._chunker.chunk(parsed)
         if chunks:
