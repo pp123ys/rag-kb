@@ -1,0 +1,5 @@
+{"query": "A-100 型号的单价是多少", "gold": ["t1"], "type": "table"}
+{"query": "HT-2026-001 合同的生效日期", "gold": ["c-ht-001"], "type": "exact"}
+{"query": "2025 年版本的保修政策是什么", "gold": ["c-warranty-v1"], "type": "version"}
+{"query": "报销流程分几步", "gold": ["c-reimburse"], "type": "semantic"}
+{"query": "销售部的联系方式", "gold": ["c-sales-contact"], "type": "department"}
