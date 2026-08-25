@@ -1,5 +1,6 @@
-﻿# scripts/smoke.ps1 —— 端到端冒烟（Windows 本机版）
-# 依次：起服务检查 → 生成样例 PDF → 入库（真实嵌入或 --skip-embed）→ 集成测试 → MCP --help
+# scripts/smoke.ps1 —— 端到端冒烟（Windows 本机版）
+# 默认嵌入式（免 Docker）；检测到 Qdrant 6333 在跑时走远程模式（需 .env 或脚本内置
+# 变量切远程）。依次：模式检查 → 生成样例 PDF → 入库 → 集成测试 → MCP 工具注册。
 #
 # 用法：powershell -ExecutionPolicy Bypass -File scripts/smoke.ps1
 # （Linux / CI 用 scripts/smoke.sh）
@@ -9,14 +10,6 @@ $OutputEncoding = New-Object System.Text.UTF8Encoding $false
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location $root
 try {
-    Write-Host "==> 1. 起服务检查"
-    # 注意：不要重定向 docker 的 stderr（PS 5.1 在 $ErrorActionPreference=Stop 下
-    # 会把原生 stderr 行变成终止性 NativeCommandError）；让其原样输出即可。
-    & docker compose up -d qdrant postgres minio
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "    （compose up 未完全成功，可能是端口被既有容器占用；继续做健康检查）"
-    }
-
     function Test-Port {
         param([int]$Port)
         try {
@@ -29,19 +22,40 @@ try {
         } catch { return $false }
     }
 
-    $services = @(@("Qdrant", 6333), @("PostgreSQL", 5432), @("MinIO", 9000))
-    $deadline = (Get-Date).AddSeconds(30)
-    do {
-        $allOk = $true
-        foreach ($s in $services) { if (-not (Test-Port -Port $s[1])) { $allOk = $false; break } }
-        if (-not $allOk) { Start-Sleep -Seconds 1 }
-    } while ((-not $allOk) -and ((Get-Date) -lt $deadline))
-    $allOk = $true
-    foreach ($s in $services) {
-        if (Test-Port -Port $s[1]) { Write-Host "    OK: $($s[0]):$($s[1])" }
-        else { Write-Host "    错误：$($s[0]):$($s[1]) 不可达" -ForegroundColor Red; $allOk = $false }
+    Write-Host "==> 1. 运行模式检查"
+    $remote = Test-Port -Port 6333
+    if ($remote) {
+        Write-Host "    （检测到 Qdrant:6333 在跑 → 远程模式；尝试拉起缺失服务）"
+        # 注意：不要重定向 docker 的 stderr（PS 5.1 在 $ErrorActionPreference=Stop 下
+        # 会把原生 stderr 行变成终止性 NativeCommandError）；让其原样输出即可。
+        & docker compose up -d qdrant postgres minio
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "    （compose up 未完全成功，可能是端口被既有容器占用；继续做健康检查）"
+        }
+        $services = @(@("Qdrant", 6333), @("PostgreSQL", 5432), @("MinIO", 9000))
+        $deadline = (Get-Date).AddSeconds(30)
+        do {
+            $allOk = $true
+            foreach ($s in $services) { if (-not (Test-Port -Port $s[1])) { $allOk = $false; break } }
+            if (-not $allOk) { Start-Sleep -Seconds 1 }
+        } while ((-not $allOk) -and ((Get-Date) -lt $deadline))
+        foreach ($s in $services) {
+            if (Test-Port -Port $s[1]) { Write-Host "    OK: $($s[0]):$($s[1])" }
+            else { Write-Host "    错误：$($s[0]):$($s[1]) 不可达" -ForegroundColor Red; $allOk = $false }
+        }
+        if (-not $allOk) { throw "依赖服务健康检查失败" }
+        # 新 config 默认嵌入式：远程模式需显式清空 qdrant_path 并切 PG/MinIO
+        $env:RAGKB_QDRANT_PATH = ""
+        $env:RAGKB_PG_DSN = "postgresql://ragkb:ragkb@localhost:5432/ragkb"
+        $env:RAGKB_MINIO_ENDPOINT = "localhost:9000"
+        $env:RAGKB_MINIO_ACCESS_KEY = "ragkb"
+        $env:RAGKB_MINIO_SECRET_KEY = "ragkb-secret"
+    } else {
+        Write-Host "    （未检测到 Qdrant:6333 → 嵌入式模式，免 Docker：向量落 data/qdrant、表格/版本 data/ragkb.db、图片 data/images）"
+        Remove-Item Env:RAGKB_QDRANT_PATH -ErrorAction SilentlyContinue
+        Remove-Item Env:RAGKB_PG_DSN -ErrorAction SilentlyContinue
+        Remove-Item Env:RAGKB_MINIO_ENDPOINT -ErrorAction SilentlyContinue
     }
-    if (-not $allOk) { throw "依赖服务健康检查失败" }
 
     Write-Host "==> 1.5 生成样例文档"
     New-Item -ItemType Directory -Force -Path "tests\fixtures" | Out-Null
@@ -84,8 +98,14 @@ doc.close()
     if ($LASTEXITCODE -ne 0) { throw "入库失败" }
     Write-Host "    OK: 入库完成"
 
-    Write-Host "==> 3. 运行离线评测（集成测试）"
-    & py -3.12 -m pytest tests/ -m integration -q
+    Write-Host "==> 3. 运行集成测试"
+    if ($remote) {
+        # 远程模式：全部集成用例（Qdrant / PG / MinIO）
+        & py -3.12 -m pytest tests/ -m integration -q
+    } else {
+        # 嵌入式模式：Qdrant 集成测试走本地嵌入式目录，免 Docker；PG/MinIO 用例跳过
+        & py -3.12 -m pytest tests/test_qdrant_indexer.py -m integration -q
+    }
     if ($LASTEXITCODE -ne 0) { throw "集成测试失败" }
     Write-Host "    OK: 集成测试通过"
 
