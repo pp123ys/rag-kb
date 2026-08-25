@@ -188,3 +188,72 @@ def test_parse_document_routes_excel_and_email(tmp_path):
     assert email_doc.department == "市场部"
     assert email_doc.version == "v2"
     assert email_doc.effective_date == "2025-07-01"
+
+
+def test_parse_document_rejects_xls_extension(tmp_path):
+    # 旧 .xls 格式 openpyxl 无法解析，已从分发映射移除——
+    # 应落入不支持的扩展名分支抛 ValueError，而不是硬失败。
+    path = tmp_path / "old.xls"
+    path.write_bytes(b"dummy xls bytes")
+    with pytest.raises(ValueError, match="不支持的文档类型"):
+        parse_document(str(path), doc_id="d1", source="old.xls")
+
+
+def test_excel_parser_without_headers(tmp_path):
+    # has_headers=False：第一行不再被当作表头，
+    # 所有行都进 rows，headers 为空列表。
+    path = tmp_path / "t_noheader.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["A-100", "99"])
+    ws.append(["B-200", "199"])
+    wb.save(path)
+    result = ExcelParser().parse(str(path), doc_id="d4",
+                                 source="t_noheader.xlsx", has_headers=False)
+    assert result.tables[0].headers == []
+    assert result.tables[0].rows == [["A-100", "99"], ["B-200", "199"]]
+
+
+def test_email_parser_html_only_body(tmp_path):
+    # 纯 HTML 邮件（无 text/plain 部分）：回退提取 text/html 并去标签。
+    path = tmp_path / "m_html.eml"
+    msg = EmailMessage()
+    msg["From"] = "a@x.com"
+    msg["To"] = "b@x.com"
+    msg["Subject"] = "公告"
+    msg.add_alternative(
+        "<html><body><p>重要通知已发布</p></body></html>", subtype="html")
+    path.write_bytes(msg.as_bytes())
+    result = EmailParser().parse(str(path), doc_id="d5", source="m_html.eml")
+    assert "重要通知已发布" in result.text
+
+
+def test_email_parser_joins_multiple_plain_parts(tmp_path):
+    # 多个 text/plain part 以换行分隔拼接，而非直接 += 粘连。
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    path = tmp_path / "m_multi.eml"
+    msg = MIMEMultipart()
+    msg["From"] = "a@x.com"
+    msg["To"] = "b@x.com"
+    msg["Subject"] = "多段正文"
+    msg.attach(MIMEText("第一段正文", "plain", "utf-8"))
+    msg.attach(MIMEText("第二段正文", "plain", "utf-8"))
+    path.write_bytes(msg.as_bytes())
+    result = EmailParser().parse(str(path), doc_id="d6", source="m_multi.eml")
+    assert "第一段正文" in result.text
+    assert "第二段正文" in result.text
+
+
+def test_email_parser_omits_empty_subject_line(tmp_path):
+    # Subject 为空时不输出 "主题：" 行。
+    path = tmp_path / "m_nosubject.eml"
+    msg = EmailMessage()
+    msg["From"] = "a@x.com"
+    msg["To"] = "b@x.com"
+    msg.set_content("正文内容")
+    path.write_bytes(msg.as_bytes())
+    result = EmailParser().parse(str(path), doc_id="d7", source="m_nosubject.eml")
+    assert "主题：" not in result.text
+    assert "正文内容" in result.text

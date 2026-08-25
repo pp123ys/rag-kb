@@ -1,6 +1,14 @@
 from ragkb.models import ParsedDocument
 
 
+def cell_to_str(value) -> str:
+    """单元格值归一：None/空→N/A，其余 strip 后转 str。"""
+    if value is None:
+        return "N/A"
+    s = str(value).strip()
+    return s if s else "N/A"
+
+
 class DocumentParser:
     """解析器协议：入参为文件路径与文档元数据，输出 ParsedDocument。"""
 
@@ -16,7 +24,9 @@ def parse_document(path: str, doc_id: str, source: str, **meta) -> ParsedDocumen
     if ext == "pdf":
         from ragkb.parsers.pdf_parser import PdfParser
         return PdfParser().parse(path, doc_id=doc_id, source=source, **meta)
-    if ext in ("xlsx", "xls"):
+    if ext == "xlsx":
+        # 仅 xlsx（OpenXML）；旧版 .xls 由 openpyxl 无法解析，
+        # 不列入分发，落入下方不支持的扩展名分支抛 ValueError。
         from ragkb.parsers.excel_parser import ExcelParser
         return ExcelParser().parse(path, doc_id=doc_id, source=source, **meta)
     if ext in ("eml", "msg"):

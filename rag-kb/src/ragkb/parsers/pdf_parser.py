@@ -2,7 +2,7 @@ import fitz
 import pdfplumber
 
 from ragkb.models import ImageData, ParsedDocument, TableData
-from ragkb.parsers.base import DocumentParser
+from ragkb.parsers.base import DocumentParser, cell_to_str
 
 
 class PdfParser(DocumentParser):
@@ -19,9 +19,8 @@ class PdfParser(DocumentParser):
                 for tbl_idx, tbl in enumerate(page.extract_tables() or [], start=1):
                     if not tbl:
                         continue
-                    headers = [str(c).strip() if c else "N/A" for c in tbl[0]]
-                    rows = [[str(c).strip() if c else "N/A" for c in row]
-                            for row in tbl[1:]]
+                    headers = [cell_to_str(c) for c in tbl[0]]
+                    rows = [[cell_to_str(c) for c in row] for row in tbl[1:]]
                     tables.append(self._make_table(headers, rows, source, page_no, tbl_idx))
 
         with fitz.open(path) as doc:

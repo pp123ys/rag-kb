@@ -1,27 +1,34 @@
 from openpyxl import load_workbook
 
 from ragkb.models import ParsedDocument, TableData
-from ragkb.parsers.base import DocumentParser
+from ragkb.parsers.base import DocumentParser, cell_to_str
 
 
 class ExcelParser(DocumentParser):
-    """Excel：每个 sheet 独立成表，保留表头与行列结构。"""
+    """Excel：每个 sheet 独立成表，保留表头与行列结构。
+
+    假设第一个非空行为表头（has_headers=True 时的默认行为）；
+    无表头的数据传 has_headers=False，此时所有行都进 rows，
+    headers 为空列表。
+    """
 
     def parse(self, path, doc_id, source, department="", version="",
-              effective_date=""):
+              effective_date="", has_headers=True):
         wb = load_workbook(path, data_only=True)
         tables = []
         for ws in wb.worksheets:
-            rows = [[str(c.value).strip() if c.value is not None else "N/A"
-                     for c in row] for row in ws.iter_rows()]
+            rows = [[cell_to_str(c.value) for c in row]
+                    for row in ws.iter_rows()]
             rows = [r for r in rows if any(v != "N/A" for v in r)]
             if not rows:
                 continue
+            headers = rows[0] if has_headers else []
+            data_rows = rows[1:] if has_headers else rows
             tables.append(TableData(
                 table_id=f"{source}-{ws.title}",
                 name=ws.title,
-                headers=rows[0],
-                rows=rows[1:],
+                headers=headers,
+                rows=data_rows,
                 source=f"{source}:{ws.title}",
             ))
         return ParsedDocument(
