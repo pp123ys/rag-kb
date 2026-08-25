@@ -46,6 +46,21 @@ def test_sparse_produces_stable_token_indices_across_texts():
         assert idx in ma and idx in mb
 
 
+def test_point_id_deterministic_and_qdrant_valid():
+    """chunk_id → 点 ID：确定性（幂等重入覆盖同一点）+ 合法 UUID（Qdrant 约束）。"""
+    import uuid as _uuid
+
+    from ragkb.indexers.qdrant_indexer import _point_id
+    a = _point_id("d1-v1.0-0")
+    b = _point_id("d1-v1.0-0")
+    c = _point_id("d1-v1.0-1")
+    assert a == b
+    assert a != c
+    _uuid.UUID(a)  # 必须是合法 UUID，否则抛 ValueError
+    # 已是合法 UUID 的 chunk_id 原样透传（兼容既有数据）
+    assert _point_id(_cid(1)) == _cid(1)
+
+
 # ---------- 集成测试（需要本地 Qdrant，docker compose） ----------
 
 @pytest.mark.integration

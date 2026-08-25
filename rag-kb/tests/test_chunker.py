@@ -116,6 +116,15 @@ def test_chunk_ids_are_unique():
     assert len(ids) == len(set(ids))
 
 
+def test_chunk_ids_deterministic_across_runs():
+    """幂等重入：同一 doc 同一内容两次切块，chunk_id 逐块一致（doc-version-index）。"""
+    text = "第一句话。第二句话。第三句话。第四句话。第五句话。" * 5
+    c1 = Chunker(chunk_target_chars=12).chunk(_doc(text))
+    c2 = Chunker(chunk_target_chars=12).chunk(_doc(text))
+    assert [c.chunk_id for c in c1] == [c.chunk_id for c in c2]
+    assert c1[0].chunk_id == "d1-v1.0-0"
+
+
 def test_text_chunks_have_no_table_or_image():
     chunks = Chunker().chunk(_doc("只有文字内容，不含表格与图片。"))
     for c in chunks:

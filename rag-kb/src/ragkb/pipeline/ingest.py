@@ -9,8 +9,10 @@ from ragkb.embedder import Embedder
 from ragkb.indexers import QdrantIndexer
 from ragkb.indexers.minio_store import MinioImageStore
 from ragkb.indexers.pg_table_indexer import PgTableIndexer
+from ragkb.models import Chunk
 from ragkb.ocr import OCRClient
 from ragkb.parsers import parse_document
+from ragkb.parsers.base import table_to_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,19 @@ class IngestPipeline:
         parsed.text = clean_text(parsed.text)
 
         chunks = self._chunker.chunk(parsed)
+        # 表格 A 路（spec §4.4）：每个表格独立成块，text 为 Markdown 序列化，
+        # 携带 table_id 打通 A↔B 联动（chunk.table_id → retrieve_table），
+        # 与正文块一起嵌入入库；正文为空（如 Excel）时表格块仍可语义检索。
+        # chunk_id 确定性（doc-version-t索引）保证幂等重入，不产生重复块。
+        for i, table in enumerate(parsed.tables):
+            chunks.append(Chunk(
+                chunk_id=f"{parsed.doc_id}-{parsed.version}-t{i}",
+                doc_id=parsed.doc_id, doc_type=parsed.doc_type,
+                source=table.source, text=table_to_markdown(table),
+                department=parsed.department, version=parsed.version,
+                effective_date=parsed.effective_date,
+                table_id=table.table_id,
+            ))
         if chunks:
             if skip_embed:
                 # 无模型缓存的机器（冒烟/CI）跳过嵌入与向量入库，其余链路照常

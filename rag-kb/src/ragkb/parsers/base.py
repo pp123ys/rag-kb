@@ -1,4 +1,4 @@
-from ragkb.models import ParsedDocument
+from ragkb.models import ParsedDocument, TableData
 
 
 def cell_to_str(value) -> str:
@@ -7,6 +7,18 @@ def cell_to_str(value) -> str:
         return "N/A"
     s = str(value).strip()
     return s if s else "N/A"
+
+
+def table_to_markdown(table: TableData) -> str:
+    """表格 → Markdown 文本（A 路：参与语义检索的表格块正文）。"""
+    lines = [f"## 表格：{table.name}", f"来源：{table.source}"]
+    header = "| " + " | ".join(table.headers) + " |"
+    sep = "| " + " | ".join(["---"] * len(table.headers)) + " |"
+    lines.append(header)
+    lines.append(sep)
+    for row in table.rows:
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
 
 
 class DocumentParser:

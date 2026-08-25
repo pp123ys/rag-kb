@@ -35,6 +35,16 @@ class _FakeEmptyTextParser(_FakeParser):
         return doc
 
 
+class _FakeNoContentParser(_FakeParser):
+    """既无正文也无表格：全链路应无任何 chunk 可嵌入。"""
+
+    def parse(self, path, doc_id, source, **meta):
+        doc = super().parse(path, doc_id, source, **meta)
+        doc.text = ""
+        doc.tables = []
+        return doc
+
+
 class _FakeChunker:
     def chunk(self, doc):
         from ragkb.models import Chunk
@@ -137,17 +147,20 @@ def test_ingest_runs_full_pipeline():
     idx = pipe._indexer
     result = pipe.ingest("/tmp/fake.pdf", doc_id="d1", source="fake.pdf",
                          version="v1.0", effective_date="2026-01-15")
-    assert len(idx.chunks) == 1
+    assert len(idx.chunks) == 2  # 1 正文块 + 1 表格 A 路块
+    table_chunks = [c for c in idx.chunks if c.table_id == "t1"]
+    assert len(table_chunks) == 1
+    assert "| 型号 | 单价 |" in table_chunks[0].text
     assert len(idx.tables) == 1
     assert pg.versions == [("d1", "v1.0", "2026-01-15", "fake.pdf")]
-    assert result == {"doc_id": "d1", "chunks": 1, "tables": 1}
+    assert result == {"doc_id": "d1", "chunks": 2, "tables": 1}
 
 
 def test_ingest_tables_go_to_pg_when_indexer_lacks_upsert_table():
     pg = _FakePg()
     pipe = _pipeline(indexer=_FakeIndexerNoTables(), pg=pg)
     pipe.ingest("/tmp/fake.pdf", doc_id="d1", source="fake.pdf")
-    assert len(pipe._indexer.chunks) == 1
+    assert len(pipe._indexer.chunks) == 2  # 1 正文 + 1 表格块（A 路照常向量入库）
     assert len(pg.tables) == 1
     assert pg.tables[0].table_id == "t1"
 
@@ -191,7 +204,7 @@ def test_ingest_applies_cleaning_before_chunking():
     pipe.ingest("/tmp/fake.pdf", doc_id="d1", source="fake.pdf",
                 version="v1.0", effective_date="2026-01-15")
     idx = pipe._indexer
-    assert len(idx.chunks) == 1
+    assert len(idx.chunks) == 2  # 1 正文 + 1 表格块
     assert "第 1 页" not in idx.chunks[0].text
 
 
@@ -204,14 +217,28 @@ def test_ingest_skips_version_registration_when_no_version():
 
 def test_ingest_skips_embedding_when_no_chunks():
     embedder = _FakeEmbedder()
-    pipe = _pipeline(parser=_FakeEmptyTextParser(), chunker=_FakeEmptyChunker(),
+    pipe = _pipeline(parser=_FakeNoContentParser(), chunker=_FakeEmptyChunker(),
                      embedder=embedder)
     idx = pipe._indexer
     pipe.ingest("/tmp/fake.pdf", doc_id="d1", source="fake.pdf",
                 version="v1.0", effective_date="2026-01-15")
     assert idx.chunks == []
-    assert len(idx.tables) == 1  # 表格 B 路独立于正文继续入库
     assert embedder.calls == 0
+
+
+def test_ingest_table_achunks_embedded_even_when_body_empty():
+    """表格 A 路：正文为空（如 Excel 无文本）时，表格 Markdown 块仍嵌入入库。"""
+    embedder = _FakeEmbedder()
+    pipe = _pipeline(parser=_FakeEmptyTextParser(), chunker=_FakeEmptyChunker(),
+                     embedder=embedder)
+    idx = pipe._indexer
+    pipe.ingest("/tmp/fake.pdf", doc_id="d1", source="fake.pdf",
+                version="v1.0", effective_date="2026-01-15")
+    assert len(idx.chunks) == 1
+    assert idx.chunks[0].table_id == "t1"
+    assert "| 型号 | 单价 |" in idx.chunks[0].text
+    assert len(idx.tables) == 1  # 表格 B 路独立于正文继续入库
+    assert embedder.calls == 1
 
 
 def test_ingest_skip_embed_skips_vector_upsert_but_keeps_rest():

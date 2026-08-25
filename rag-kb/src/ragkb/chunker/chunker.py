@@ -1,5 +1,3 @@
-import uuid
-
 from ragkb.models import Chunk, ParsedDocument
 
 # 句子结束符：CJK/ASCII 句读（。！？!?；;），以及后跟空白的英文句号 "."
@@ -89,14 +87,15 @@ class Chunker:
         return out
 
     def _pack(self, doc: ParsedDocument, sentences: list[str]) -> list[Chunk]:
-        chunks, buf = [], ""
+        chunks, buf, idx = [], "", 0
         for sent in sentences:
             if buf and len(buf) + len(sent) > self.target:
-                chunks.append(self._make_chunk(doc, buf))
+                chunks.append(self._make_chunk(doc, buf, idx))
+                idx += 1
                 buf = self._overlap_tail(buf)
             buf += sent
         if buf:
-            chunks.append(self._make_chunk(doc, buf))
+            chunks.append(self._make_chunk(doc, buf, idx))
         return chunks
 
     def _overlap_tail(self, buf: str) -> str:
@@ -114,9 +113,12 @@ class Chunker:
             tail = buf[prev[-1]:]
         return tail
 
-    def _make_chunk(self, doc: ParsedDocument, text: str) -> Chunk:
+    def _make_chunk(self, doc: ParsedDocument, text: str, index: int) -> Chunk:
+        # chunk_id 确定性（doc-version-index）：同一 doc 同版本重跑切块得到
+        # 相同 chunk_id → Qdrant 同一点被覆盖，重入入库幂等不产生重复块。
+        # version 可能为空串（如 "d1--0"），仍保持确定性。
         return Chunk(
-            chunk_id=str(uuid.uuid4()),
+            chunk_id=f"{doc.doc_id}-{doc.version}-{index}",
             doc_id=doc.doc_id, doc_type=doc.doc_type, source=doc.source,
             text=text, department=doc.department, version=doc.version,
             effective_date=doc.effective_date,

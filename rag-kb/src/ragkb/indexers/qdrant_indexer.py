@@ -1,5 +1,6 @@
 import hashlib
 import re
+import uuid
 
 import jieba
 from qdrant_client import QdrantClient
@@ -13,6 +14,22 @@ from ragkb.models import Chunk
 # 单字符纯字母/数字 token（如 "A"、"100"）对型号/合同号召回有价值，保留；
 # 中文单字（如 "的"）与纯标点（"-"）丢弃。
 _ALNUM_RE = re.compile(r"[A-Za-z0-9]+")
+
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _point_id(chunk_id: str) -> str:
+    """chunk_id → 合法 Qdrant 点 ID（Qdrant 仅接受无符号整数或 UUID 字符串）。
+
+    确定性 chunk_id（doc-version-index）不是 UUID，用 uuid5 映射为确定性
+    UUID：同一 chunk_id 恒映射到同一点，重跑入库覆盖同一点而非追加（幂等）。
+    已是合法 UUID 的 chunk_id 原样透传（兼容既有数据）。
+    """
+    if _UUID_RE.fullmatch(chunk_id):
+        return chunk_id
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
 
 
 def tokenize(text: str) -> list[str]:
@@ -100,8 +117,9 @@ class QdrantIndexer:
             payload = chunk.metadata()
             # 文本必须随 payload 存储：向量无法重建原文，检索命中后 text 直接读 payload
             payload["text"] = chunk.text
+            # 点 ID 由 chunk_id 确定性映射：幂等重入覆盖同一点，不产生重复块
             points.append(PointStruct(
-                id=chunk.chunk_id,  # chunk_id 即 uuid4，直接作点 ID，无 crc32 碰撞
+                id=_point_id(chunk.chunk_id),
                 vector={"": vec, "bm25": _sparse(chunk.text)},
                 payload=payload,
             ))

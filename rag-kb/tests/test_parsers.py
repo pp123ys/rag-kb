@@ -2,7 +2,7 @@ import fitz
 import pytest
 
 from ragkb.models import TableData
-from ragkb.parsers.base import parse_document
+from ragkb.parsers.base import parse_document, table_to_markdown
 from ragkb.parsers.pdf_parser import PdfParser
 
 
@@ -156,6 +156,19 @@ def test_excel_parser_keeps_row_column_structure(tmp_path):
     assert result.tables[0].headers == ["型号", "单价"]
     assert result.tables[0].rows == [["A-100", "99"]]
     assert result.tables[0].source == "t.xlsx:报价"
+
+
+def test_table_to_markdown_serializes_headers_and_rows():
+    # 表格 A 路：TableData → Markdown 文本，供语义检索（与正文分块独立）
+    md = table_to_markdown(TableData(
+        table_id="t.xlsx-报价", name="报价", headers=["型号", "单价"],
+        rows=[["A-100", "99"]], source="t.xlsx:报价"))
+    lines = md.splitlines()
+    assert lines[0] == "## 表格：报价"
+    assert "来源：t.xlsx:报价" in md
+    assert "| 型号 | 单价 |" in md
+    assert "| --- | --- |" in md
+    assert "| A-100 | 99 |" in md
 
 
 def test_email_parser_extracts_body(tmp_path):
