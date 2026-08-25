@@ -121,9 +121,8 @@
 
 ### 4.6 双路入库
 
-- **向量库**：Milvus（千份级，后续可平滑扩到分布式；单机起步可用 Qdrant 轻量替代）。中文嵌入用 **BGE-M3**（1024 维，支持中文/英文/混合，且自带稀疏向量能力）
-- **关键词索引**：Elasticsearch（BM25）。产品型号、合同编号等精确值靠这一路兜底
-- **表格索引**：表格结构数据存 PostgreSQL + 全文检索，或 ES 独立 index
+- **向量库 + 关键词（Qdrant 单存储）**：一套 Qdrant 同时承载 dense 向量检索与 BM25 关键词检索（详见 4.6.1）。中文嵌入用 **BGE-M3**（1024 维，支持中文/英文/混合，且自带稀疏向量能力）
+- **表格索引**：表格结构数据存 PostgreSQL + 全文检索
 - **对象存储**：MinIO 存原始图片，chunk 经 `image_id` 引用
 
 > BGE-M3 的稀疏向量与稠密向量可以双路同源，简化模型管理；但 BM25 关键词路仍保留，因为稀疏向量与 BM25 召回互补（BM25 对术语精确度更强）。
@@ -138,7 +137,7 @@
 ### 5.2 双路召回
 
 - **向量路**：query 嵌入 → 向量库 top-K 召回（K=50）
-- **关键词路**：query 经分词 → ES BM25 top-K 召回（K=50）
+- **关键词路**：query 经中文分词 → Qdrant BM25 召回 top-K（K=50）
 - 两路并行执行，超时与失败互不影响（一路挂了另一路仍可用）
 
 ### 5.3 RRF 融合
@@ -159,7 +158,7 @@ score(d) = Σ 1 / (k + rank_i(d))，k 默认 60
 
 两个位置双重保险：
 
-1. **检索前**（索引侧）：向量库检索时用 `effective_date` 过滤条件排除已过期版本；ES 查询加 filter
+1. **检索前**（索引侧）：向量库检索时用 `effective_date` 过滤条件排除已过期版本；关键词检索加同样 filter
 2. **检索后**（结果侧）：对同一 `doc_id` 的多版本结果按生效日期取最新，去重
 
 ### 5.6 上下文组装
@@ -216,7 +215,7 @@ agent 生成回答后，可在 agent 侧对回答中每个出处引用做后置�
        → [清洗] → 干净文本+表格
        → [切块] → chunks(含 overlap + 元数据)
        → [嵌入] BGE-M3 → 向量库 upsert
-       → [关键词] → ES index
+       → [关键词] → Qdrant BM25 index
        → [表格] → 表格索引 + Markdown 表入库
 
 问答:
@@ -270,7 +269,7 @@ agent 生成回答后，可在 agent 侧对回答中每个出处引用做后置�
 - **权限**：元数据已含 `department` / 密级字段，检索链路预留 filter 参数；`search` 工具已预留 `department` 入参，将来按 agent 身份注入即可启用
 - **增量索引**：流水线按 `doc_id + version` 幂等，支持增量入库与定时全量校验
 - **查询改写**：v2 可选，仅首轮召回不足时启用
-- **向量库扩容**：Milvus 单机起步，规模增长后平滑切分布式
+- **存储扩容**：Qdrant 单机起步，规模增长后平滑扩分布式（Qdrant 原生支持）
 - **更多 MCP 工具**：v2 可按需扩展（如 `upload_document` 让 agent 直接入库、`list_documents` 浏览目录）
 
 ## 11. 组件清单（实现阶段展开）
@@ -282,11 +281,20 @@ agent 生成回答后，可在 agent 侧对回答中每个出处引用做后置�
 | `ocr/` | 图片文字提取 | PaddleOCR |
 | `chunker/` | 语义切块 + overlap | 自研 |
 | `embedder/` | BGE-M3 嵌入 | sentence-transformers |
-| `indexers/` | 向量库/ES/表格/对象存储入库 | Milvus, Elasticsearch, PostgreSQL, MinIO |
+| `indexers/` | Qdrant（向量+BM25）/ PostgreSQL 表格 / MinIO 入库 | Qdrant, PostgreSQL, MinIO |
 | `retriever/` | 双路召回 + RRF | 自研 |
 | `reranker/` | bge-reranker 重排 | sentence-transformers |
 | `mcp_server/` | MCP 工具集（search/retrieve_table/get_document/list_versions）+ 双传输 | MCP Python SDK（FastMCP） |
 
-> 待确认项 1：ES 与向量库是否合并为单一存储（Qdrant 自带 BM25 能力可二选一），留待实现计划阶段与其余模块需求统一评审时定。
->
-> 待确认项 2：agent 侧 Prompt 模板由本知识库交付方提供，还是由 agent 接入方自行实现（模板以文档形式随交付提供，不强制依赖）。
+> 待确认项已定（2026-08-25）：
+> 1. **存储选型**：Qdrant 单存储——一套 Qdrant 同时管向量与 BM25 关键词（Qdrant 新版自带 BM25 能力），表格索引仍用 PostgreSQL。不再引入 ES 与 Milvus。
+> 2. **Prompt 模板归属**：知识库交付时附送 agent 系统提示词模板（6.2 三条规则），agent 接入方直接采用。
+
+### 4.6.1 存储选型落地（Qdrant 单存储）
+
+- 向量库：Qdrant（`Collection` 存 dense 向量，BGE-M3 1024 维）
+- 关键词：Qdrant 的 BM25 稀疏检索能力（`sparse vector` 或全文索引），query 分词后走 Qdrant 召回
+- 表格索引：PostgreSQL（表格结构数据 + 全文检索），经 `table_id` 关联
+- 对象存储：MinIO 存原始图片
+
+> 若 Qdrant BM25 在千份级+中文分词下效果不达标，备选回退方案为引入 ES 仅做关键词路（架构不变，仅替换检索实现），此决策点留待检索评测（9.2）数据支撑。
