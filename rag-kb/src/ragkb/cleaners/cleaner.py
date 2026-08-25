@@ -5,9 +5,13 @@ _FOOTER_PATTERNS = [
     re.compile(r"^\s*第\s*\d+\s*页\s*[/／]\s*共\s*\d+\s*页\s*$"),
     re.compile(r"^\s*[-–—]?\s*\d+\s*[-–—]?\s*$"),
     re.compile(r"本文档仅供内部使用"),
-    re.compile(r"机密|Confidential"),
+    re.compile(r"^\s*(机密|Confidential|CONFIDENTIAL)\s*$"),
 ]
-_GARBAGE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+# C0 控制符（\x00-\x08\x0b\x0c\x0e-\x1f）+ DEL(0x7f) + C1（排除合法 \x85 NEL 与 \xa0 NBSP）
+_GARBAGE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x80-\x84\x86-\x9f]")
+_WHITESPACE = re.compile(r"\s+")
 
 
 def clean_text(text: str) -> str:
@@ -21,7 +25,7 @@ def clean_text(text: str) -> str:
         if any(p.search(line) for p in _FOOTER_PATTERNS):
             continue  # 丢弃页眉页脚行
         line = _GARBAGE.sub("", line)
-        line = re.sub(r"[ \t\u3000]+", " ", line)  # 统一空白
+        line = _WHITESPACE.sub(" ", line)  # 统一空白（含 \xa0 NBSP 与 \u3000）
         lines.append(line)
 
     out = "\n".join(lines)
