@@ -7,6 +7,16 @@ class OCRUnavailableError(RuntimeError):
     """OCR 引擎不可用（模型未下载或初始化失败）。"""
 
 
+def _parse_ocr_result(result) -> str:
+    """解析 PaddleOCR 2.x 返回的嵌套结果 [[[box, (text, conf)], ...], ...]。"""
+    lines = []
+    for page in result or []:
+        for line in page or []:
+            if len(line) >= 2 and line[1]:  # [box, (text, conf)]
+                lines.append(str(line[1][0]))
+    return "\n".join(lines).strip()
+
+
 class OCRClient:
     """PaddleOCR 封装。构造时懒加载模型；失败降级为不可用，不阻塞流水线。"""
 
@@ -41,9 +51,4 @@ class OCRClient:
         import io
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         result = self._engine.ocr(np.array(img), cls=True)
-        lines = []
-        for page in result or []:
-            for line in page or []:
-                if line and len(line) >= 1 and line[1]:
-                    lines.append(str(line[1][0]))
-        return "\n".join(lines).strip()
+        return _parse_ocr_result(result)
