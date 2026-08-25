@@ -97,7 +97,7 @@ def test_keyword_bm25_recall(indexer):
 
 @pytest.mark.integration
 def test_payload_round_trip(indexer):
-    """payload 元数据字段全量往返（text 不随 payload 存储，经向量索引召回）。"""
+    """payload 元数据字段全量往返，text 随 payload 存储（向量无法重建原文）。"""
     indexer.recreate()
     chunk = Chunk(
         chunk_id=_cid(1), doc_id="d1", doc_type="pdf", source="a.pdf",
@@ -117,6 +117,13 @@ def test_payload_round_trip(indexer):
     assert got.effective_date == "2026-03-20"
     assert got.table_id == "tbl-42"
     assert got.image_id == "img-7"
+    # round-trip 后 text 必须保留（向量无法重建原文）
+    assert got.text == "含全量元数据的文档片段"
+
+    # 关键词召回路同样必须保留 text
+    kw_hits = indexer.search_keyword("全量元数据", top_k=5)
+    assert len(kw_hits) == 1
+    assert kw_hits[0].text == "含全量元数据的文档片段"
 
 
 @pytest.mark.integration

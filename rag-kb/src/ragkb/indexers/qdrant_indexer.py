@@ -98,6 +98,8 @@ class QdrantIndexer:
         points = []
         for chunk, vec in zip(chunks, embeddings, strict=True):
             payload = chunk.metadata()
+            # 文本必须随 payload 存储：向量无法重建原文，检索命中后 text 直接读 payload
+            payload["text"] = chunk.text
             points.append(PointStruct(
                 id=chunk.chunk_id,  # chunk_id 即 uuid4，直接作点 ID，无 crc32 碰撞
                 vector={"": vec, "bm25": _sparse(chunk.text)},

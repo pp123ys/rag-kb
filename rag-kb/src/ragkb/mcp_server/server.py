@@ -9,6 +9,7 @@ from ragkb.embedder import Embedder
 from ragkb.indexers import QdrantIndexer
 from ragkb.indexers.minio_store import MinioImageStore
 from ragkb.indexers.pg_table_indexer import PgTableIndexer
+from ragkb.models import Chunk
 from ragkb.reranker import Reranker
 from ragkb.retriever import Retriever
 
@@ -25,6 +26,31 @@ class VersionStore:
         return self._pg.versions(doc_id)
 
 
+class CurrentVersionFilter:
+    """结果侧版本过滤：对每个 doc_id 只保留当前生效版本（PG document_versions 为准）。
+
+    检索到的旧版本 chunk 一律剔除，保证只返回当前生效版本内容。
+    """
+
+    def __init__(self, pg):
+        self._pg = pg
+
+    def __call__(self, chunks: list[Chunk]) -> list[Chunk]:
+        # 收集涉及的 doc_id
+        doc_ids = {c.doc_id for c in chunks if c.doc_id}
+        if not doc_ids:
+            return chunks
+        # 查询每个 doc 的当前生效版本（PG 已按 effective_date DESC 排序）
+        current: dict[str, str] = {}
+        for doc_id in doc_ids:
+            versions = self._pg.versions(doc_id)
+            if versions:
+                current[doc_id] = versions[0]["version"]  # 生效日期最新者
+        # 保留无版本记录（可能未走 ingest 版本登记）或匹配当前版本的 chunk
+        return [c for c in chunks
+                if c.doc_id not in current or c.version == current[c.doc_id]]
+
+
 class _QueryRouter:
     """把 MCP 工具请求路由到检索组件（可注入替身供测试）。"""
 
@@ -34,20 +60,29 @@ class _QueryRouter:
         self._indexer = indexer or QdrantIndexer(self._settings)
         self._embedder = embedder or Embedder(self._settings.embed_model)
         self._pg = pg or PgTableIndexer(self._settings.pg_dsn)
+        # 当前生效版本过滤（结果侧，PG document_versions 为权威）：
+        # 注入默认 Retriever（检索链路内过滤），search 返回前再兜底执行一次
+        # （覆盖测试注入的自定义 retriever 场景，保证任何检索器结果都过版本闸门）
+        self._version_filter = CurrentVersionFilter(self._pg)
         # 默认链路接真实重排器（懒加载，零启动成本）；测试注入 retriever 时保持原样
         self._retriever = retriever or Retriever(
-            indexer=self._indexer, reranker=Reranker(self._settings.rerank_model))
+            indexer=self._indexer,
+            reranker=Reranker(self._settings.rerank_model),
+            version_filter=self._version_filter,
+        )
         self._version_store = version_store or VersionStore(self._pg)
         self._minio = minio or MinioImageStore(self._settings)
 
     def search(self, query: str, top_k: int = 5,
                version: str | None = None,
                department: str | None = None) -> dict:
-        """双路召回 + RRF + 重排，返回带出处上下文。版本过滤与权限过滤为预留能力。"""
+        """双路召回 + RRF + 重排 + 当前生效版本过滤，返回带出处上下文。权限过滤为预留能力。"""
         query_vec = self._embedder.embed([query])[0].tolist()
         # 关键字传参：兼容测试替身（**kw）与真实 Retriever 签名
         chunks = self._retriever.retrieve(query=query, query_vec=query_vec,
                                           top_m=top_k)
+        # 当前生效版本过滤：只返回 PG document_versions 中生效日期最新的版本内容
+        chunks = self._version_filter(chunks)
         if not chunks:
             return {"results": [], "empty_reason": "no_hits"}
         # 防幻觉硬保证（§6.1.1）：无来源的 chunk 一律不返回

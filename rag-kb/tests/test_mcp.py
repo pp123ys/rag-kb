@@ -31,6 +31,10 @@ class _FakePg:
     def search_headers(self, keyword):
         return [{"table_id": "t1", "name": "报价表", "source": "a.xlsx:报价"}]
 
+    def versions(self, doc_id):
+        # 默认无版本登记：结果侧版本过滤对无记录 doc 放行
+        return []
+
 
 def test_search_tool_returns_sourced_context():
     server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
@@ -106,3 +110,66 @@ def test_search_filters_chunks_without_source():
     result = server._search("测试", top_k=3)
     assert result["results"] == []
     assert result["empty_reason"] == "no_hits"
+
+
+class _VersionPg:
+    def __init__(self, versions_map):
+        self._m = versions_map
+
+    def versions(self, doc_id):
+        return self._m.get(doc_id, [])
+
+
+def test_current_version_filter_keeps_only_current():
+    from ragkb.mcp_server.server import CurrentVersionFilter
+
+    f = CurrentVersionFilter(_VersionPg({
+        "d1": [{"version": "v2.0", "effective_date": "2026-06-01"},
+               {"version": "v1.0", "effective_date": "2025-01-01"}]}))
+    chunks = [
+        Chunk(chunk_id="old", doc_id="d1", doc_type="pdf", source="a.pdf",
+              text="旧版", version="v1.0", effective_date="2025-01-01"),
+        Chunk(chunk_id="new", doc_id="d1", doc_type="pdf", source="a.pdf",
+              text="新版", version="v2.0", effective_date="2026-06-01"),
+        Chunk(chunk_id="noreg", doc_id="d2", doc_type="pdf", source="b.pdf",
+              text="无登记", version="v1.0", effective_date="2026-01-01"),
+    ]
+    out = f(chunks)
+    assert {c.chunk_id for c in out} == {"new", "noreg"}
+
+
+def test_current_version_filter_passes_chunks_without_version():
+    from ragkb.mcp_server.server import CurrentVersionFilter
+
+    f = CurrentVersionFilter(_VersionPg({}))
+    chunks = [
+        Chunk(chunk_id="c1", doc_id="d1", doc_type="pdf", source="a.pdf",
+              text="无版本字段", version="", effective_date=""),
+    ]
+    assert f(chunks) == chunks
+
+
+class _TwoVersionRetriever:
+    def retrieve(self, query, query_vec, top_k=50, top_n=20, top_m=5,
+                 must_not_versions=None):
+        return [
+            Chunk(chunk_id="old", doc_id="d1", doc_type="pdf", source="a.pdf",
+                  text="旧版内容", version="v1.0", effective_date="2025-01-01"),
+            Chunk(chunk_id="new", doc_id="d1", doc_type="pdf", source="a.pdf",
+                  text="新版内容", version="v2.0", effective_date="2026-06-01"),
+        ]
+
+
+class _VersionedPg(_FakePg):
+    def versions(self, doc_id):
+        return [{"version": "v2.0", "effective_date": "2026-06-01"},
+                {"version": "v1.0", "effective_date": "2025-01-01"}]
+
+
+def test_search_filters_old_versions():
+    server = build_server(retriever=_TwoVersionRetriever(), pg=_VersionedPg(),
+                          embedder=_FakeEmbedder())
+    result = server._search("测试", top_k=3)
+    ids = [r["chunk_id"] for r in result["results"]]
+    assert "old" not in ids
+    assert "new" in ids
