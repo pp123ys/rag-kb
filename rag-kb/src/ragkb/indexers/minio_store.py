@@ -32,3 +32,10 @@ class MinioImageStore:
         finally:
             resp.close()
             resp.release_conn()
+
+    def delete(self, image_id: str):
+        """删除原图；对象不存在时静默（幂等）。"""
+        try:
+            self._client.remove_object(self._bucket, image_id)
+        except Exception:
+            pass

@@ -27,3 +27,11 @@ class LocalImageStore:
     def get(self, image_id: str) -> bytes:
         safe_name = Path(image_id).name
         return (self._dir / safe_name).read_bytes()
+
+    def delete(self, image_id: str):
+        """删除原图；文件不存在时静默（幂等）。"""
+        safe_name = Path(image_id).name
+        try:
+            (self._dir / safe_name).unlink()
+        except FileNotFoundError:
+            pass

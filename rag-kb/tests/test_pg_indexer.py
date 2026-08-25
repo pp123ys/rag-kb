@@ -96,3 +96,28 @@ def test_register_and_query_versions(pg_backend):
     versions = pg_backend.versions("d1")
     assert versions[0]["version"] == "v2.0"  # 生效日期降序
     assert len(versions) == 2
+
+
+@pytest.mark.parametrize("pg_backend", [
+    "sqlite",
+    pytest.param("pg", marks=pytest.mark.integration),  # 需 docker 起 postgres
+], indirect=True)
+def test_delete_by_doc_id_removes_tables_and_versions(pg_backend):
+    pg_backend.upsert(TableData(table_id="t1", name="报价表", headers=["型号", "单价"],
+                                rows=[["A-100", "99"]], source="a.xlsx:报价",
+                                doc_id="doc-a"))
+    pg_backend.upsert(TableData(table_id="t2", name="库存表", headers=["型号", "数量"],
+                                rows=[["B-200", "50"]], source="b.xlsx:库存",
+                                doc_id="doc-b"))
+    pg_backend.register_version("doc-a", "v1.0", "2026-01-01", "a.xlsx")
+    pg_backend.register_version("doc-b", "v1.0", "2026-01-01", "b.xlsx")
+
+    out = pg_backend.delete_by_doc_id("doc-a")
+    assert out == {"tables": 1, "versions": 1}
+    # 只删 doc-a：doc-b 的表格与版本仍在
+    assert pg_backend.query("t1") is None
+    assert pg_backend.query("t2") is not None
+    assert pg_backend.versions("doc-a") == []
+    assert len(pg_backend.versions("doc-b")) == 1
+    # 幂等
+    assert pg_backend.delete_by_doc_id("doc-a") == {"tables": 0, "versions": 0}

@@ -19,7 +19,8 @@ class PgTableIndexer:
                     headers JSONB NOT NULL,
                     rows JSONB NOT NULL,
                     source TEXT NOT NULL,
-                    headers_text TEXT NOT NULL
+                    headers_text TEXT NOT NULL,
+                    doc_id TEXT NOT NULL DEFAULT ''
                 )
             """)
             conn.execute("""
@@ -31,6 +32,9 @@ class PgTableIndexer:
                     PRIMARY KEY (doc_id, version)
                 )
             """)
+            # 旧表迁移：doc_id 列是删除/归属用，早期 schema 没有
+            conn.execute("ALTER TABLE tables_index "
+                         "ADD COLUMN IF NOT EXISTS doc_id TEXT NOT NULL DEFAULT ''")
             conn.commit()
 
     def upsert(self, table: TableData):
@@ -45,15 +49,16 @@ class PgTableIndexer:
         with psycopg.connect(self._dsn) as conn:
             conn.execute(
                 """
-                INSERT INTO tables_index (table_id, name, headers, rows, source, headers_text)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO tables_index (table_id, name, headers, rows, source, headers_text, doc_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (table_id) DO UPDATE SET
                     name = EXCLUDED.name, headers = EXCLUDED.headers,
                     rows = EXCLUDED.rows, source = EXCLUDED.source,
-                    headers_text = EXCLUDED.headers_text
+                    headers_text = EXCLUDED.headers_text,
+                    doc_id = EXCLUDED.doc_id
                 """,
                 (table.table_id, table.name, Jsonb(table.headers),
-                 Jsonb(table.rows), table.source, headers_text),
+                 Jsonb(table.rows), table.source, headers_text, table.doc_id),
             )
             conn.commit()
 
@@ -101,3 +106,15 @@ class PgTableIndexer:
                 "WHERE headers_text ILIKE %s ESCAPE '\\'",
                 (f"%{escaped}%",)).fetchall()
         return [{"table_id": r[0], "name": r[1], "source": r[2]} for r in rows]
+
+    def delete_by_doc_id(self, doc_id: str) -> dict:
+        """删除某文档的全部表格与版本登记，返回删除条数。"""
+        with psycopg.connect(self._dsn) as conn:
+            cur = conn.execute(
+                "DELETE FROM tables_index WHERE doc_id = %s", (doc_id,))
+            tables = cur.rowcount
+            cur = conn.execute(
+                "DELETE FROM document_versions WHERE doc_id = %s", (doc_id,))
+            versions = cur.rowcount
+            conn.commit()
+        return {"tables": tables, "versions": versions}

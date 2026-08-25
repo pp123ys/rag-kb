@@ -30,6 +30,7 @@ class ExcelParser(DocumentParser):
                 headers=headers,
                 rows=data_rows,
                 source=f"{source}:{ws.title}",
+                doc_id=doc_id,
             ))
         return ParsedDocument(
             doc_id=doc_id, doc_type="excel", source=source, text="",

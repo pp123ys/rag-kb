@@ -23,7 +23,8 @@ class PdfParser(DocumentParser):
                         continue
                     headers = [cell_to_str(c) for c in tbl[0]]
                     rows = [[cell_to_str(c) for c in row] for row in tbl[1:]]
-                    tables.append(self._make_table(headers, rows, source, page_no, tbl_idx))
+                    tables.append(self._make_table(headers, rows, source,
+                                                   page_no, tbl_idx, doc_id))
 
         with fitz.open(path) as doc:
             for page_no, page in enumerate(doc, start=1):
@@ -45,7 +46,8 @@ class PdfParser(DocumentParser):
         )
 
     @staticmethod
-    def _make_table(headers, rows, source, page_no, tbl_idx=1):
+    def _make_table(headers, rows, source, page_no, tbl_idx=1, doc_id=""):
         table_id = f"{source}-{page_no}-{tbl_idx}-{len(headers)}x{len(rows)}"
         return TableData(table_id=table_id, name=f"第{page_no}页第{tbl_idx}张表格",
-                         headers=headers, rows=rows, source=f"{source}:{page_no}")
+                         headers=headers, rows=rows, source=f"{source}:{page_no}",
+                         doc_id=doc_id)

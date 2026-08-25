@@ -54,6 +54,7 @@ class CsvParser(DocumentParser):
                 headers=headers,
                 rows=[[cell_to_str(c) for c in r] for r in data_rows],
                 source=f"{source}:csv",
+                doc_id=doc_id,
             )]
         return ParsedDocument(
             doc_id=doc_id, doc_type="csv", source=source, text="",

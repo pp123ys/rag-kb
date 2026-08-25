@@ -9,6 +9,7 @@ class TableData:
     headers: list[str]
     rows: list[list[str]]
     source: str  # 文件名:页码 或 文件名:Sheet名
+    doc_id: str = ""  # 所属文档 id（删除/归属用；解析器透传）
 
 
 @dataclass

@@ -328,3 +328,61 @@ def test_ingest_document_tool_registered():
     assert tool is not None
     props = tool.parameters["properties"]
     assert "path" in props and "skip_embed" in props
+
+
+class _FakeDeleteIndexer:
+    def __init__(self, payloads):
+        self._payloads = payloads
+        self.deleted_doc = None
+
+    def fetch_payloads_by_doc_id(self, doc_id):
+        return self._payloads
+
+    def delete_by_doc_id(self, doc_id):
+        self.deleted_doc = doc_id
+        return len(self._payloads)
+
+
+class _FakeDeletePg:
+    def delete_by_doc_id(self, doc_id):
+        return {"tables": 2, "versions": 1}
+
+
+class _FakeDeleteMinio:
+    def __init__(self):
+        self.deleted = []
+
+    def delete(self, image_id):
+        self.deleted.append(image_id)
+
+
+def test_delete_document_routes_all_stores():
+    """delete_document：向量 + 原图（去重）+ 表格/版本，全量清理。"""
+    idx = _FakeDeleteIndexer([{"image_id": "i1"}, {"image_id": "i2"}, {}])
+    minio = _FakeDeleteMinio()
+    pg = _FakeDeletePg()
+    server = build_server(retriever=_FakeRetriever(), pg=pg,
+                          embedder=_FakeEmbedder(), indexer=idx, minio=minio)
+    out = server._delete("doc-1")
+    assert out == {"doc_id": "doc-1", "chunks": 3,
+                   "images": 2, "tables": 2, "versions": 1}
+    assert idx.deleted_doc == "doc-1"
+    assert sorted(minio.deleted) == ["i1", "i2"]
+
+
+def test_delete_document_empty_payloads_no_images():
+    idx = _FakeDeleteIndexer([])
+    minio = _FakeDeleteMinio()
+    server = build_server(retriever=_FakeRetriever(), pg=_FakeDeletePg(),
+                          embedder=_FakeEmbedder(), indexer=idx, minio=minio)
+    out = server._delete("doc-missing")
+    assert out["chunks"] == 0 and out["images"] == 0
+    assert minio.deleted == []
+
+
+def test_delete_document_tool_registered():
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder())
+    tool = server._tool_manager.get_tool("delete_document")
+    assert tool is not None
+    assert "doc_id" in tool.parameters["properties"]

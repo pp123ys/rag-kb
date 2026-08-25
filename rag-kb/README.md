@@ -33,6 +33,7 @@
 | 工具 | 用途 |
 |------|------|
 | `ingest_document` | 入库文档（pdf / xlsx / eml / msg / md / csv） |
+| `delete_document` | 删除文档（向量 + 表格/版本 + 原图，幂等） |
 | `search` | 双路召回 + RRF + 重排，返回带 source 的上下文（版本/权限过滤为预留能力） |
 | `retrieve_table` | 表格精确取数 / 按表头查表 |
 | `get_document` | 取回原文块 / 图片原图 |

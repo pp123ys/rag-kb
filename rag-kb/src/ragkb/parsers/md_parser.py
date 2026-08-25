@@ -30,7 +30,8 @@ def _split_cells(line: str) -> list[str]:
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
-def _extract_tables(lines: list[str], source: str) -> tuple[list[TableData], list[str]]:
+def _extract_tables(lines: list[str], source: str,
+                    doc_id: str = "") -> tuple[list[TableData], list[str]]:
     """扫描 GFM 表格块；返回 (表格列表, 剔除表格行后的正文行)。"""
     tables: list[TableData] = []
     body: list[str] = []
@@ -54,6 +55,7 @@ def _extract_tables(lines: list[str], source: str) -> tuple[list[TableData], lis
                 headers=[cell_to_str(h) for h in headers],
                 rows=[[cell_to_str(c) for c in r] for r in rows],
                 source=f"{source}:md",
+                doc_id=doc_id,
             ))
             continue
         body.append(line)
@@ -68,7 +70,7 @@ class MarkdownParser(DocumentParser):
               effective_date=""):
         text = _read_text(path)
         lines = text.splitlines()
-        tables, body = _extract_tables(lines, source)
+        tables, body = _extract_tables(lines, source, doc_id)
         return ParsedDocument(
             doc_id=doc_id, doc_type="markdown", source=source,
             text="\n".join(body).strip(),

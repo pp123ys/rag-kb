@@ -55,6 +55,7 @@ py -3.12 -m ragkb.mcp_server.server --transport both
 | 工具 | 用途 | 关键入参 |
 |------|------|----------|
 | `ingest_document` | 入库文档（pdf / xlsx / eml / msg / md / csv） | `path`（必填，server 侧路径）、`source`、`department`、`version`、`effective_date`、`skip_embed` |
+| `delete_document` | 删除文档（向量 + 表格/版本 + 原图，幂等） | `doc_id`（入库返回的文档 id） |
 | `search` | 语义+关键词混合检索，返回带出处上下文 | `query`（必填）、`top_k`（默认5）、`version`（可选，查指定版本） |
 | `retrieve_table` | 表格精确取数 / 按表头查表 | `table_id` 或 `query` |
 | `get_document` | 取回原文块 / 图片原图 | `chunk_id` 或 `image_id` |
@@ -256,7 +257,7 @@ py -3.12 scripts\verify_mcp_connection.py
 
 ```
 连接方式: stdio
-可用工具: ['search', 'retrieve_table', 'get_document', 'list_versions', 'ingest_document']
+可用工具: ['delete_document', 'get_document', 'ingest_document', 'list_versions', 'retrieve_table', 'search']
 search('A-100 单价多少'):
   [demo.pdf] v1.0 (score 0.99): A-100 型号的单价为 99 元，保修期一年。
 ```

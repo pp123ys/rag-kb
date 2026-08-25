@@ -173,6 +173,23 @@ class _QueryRouter:
     def list_versions(self, doc_id: str) -> dict:
         return {"versions": self._version_store.versions(doc_id)}
 
+    def delete(self, doc_id: str) -> dict:
+        """删除文档：向量 chunk + 表格/版本登记 + 原图，全量清理。
+
+        幂等：文档不存在时各存储删除数为 0，不报错。
+        """
+        # 1. 先取 payload（收集 image_id 供图片清理），再删向量
+        payloads = self._indexer.fetch_payloads_by_doc_id(doc_id)
+        chunks = self._indexer.delete_by_doc_id(doc_id)
+        # 2. 原图（幂等删除）
+        image_ids = {p.get("image_id") for p in payloads if p.get("image_id")}
+        for image_id in image_ids:
+            self._minio.delete(image_id)
+        # 3. 表格与版本登记
+        tab = self._pg.delete_by_doc_id(doc_id)
+        return {"doc_id": doc_id, "chunks": chunks,
+                "images": len(image_ids), **tab}
+
 
 def build_server(retriever=None, pg=None, embedder=None, indexer=None,
                  version_store=None, minio=None, settings=None,
@@ -212,6 +229,14 @@ def build_server(retriever=None, pg=None, embedder=None, indexer=None,
         return router.list_versions(doc_id)
 
     @mcp.tool()
+    def delete_document(doc_id: str) -> dict:
+        """删除文档：向量 chunk + 表格/版本登记 + 原图，全量清理（幂等）。
+
+        doc_id 为入库时返回的文档 id（或 search 结果中的 chunk_id 前缀）。
+        """
+        return router.delete(doc_id)
+
+    @mcp.tool()
     def ingest_document(path: str, source: str = "", department: str = "",
                         version: str = "", effective_date: str = "",
                         skip_embed: bool = False) -> dict:
@@ -232,6 +257,7 @@ def build_server(retriever=None, pg=None, embedder=None, indexer=None,
     mcp._retrieve_table = router.retrieve_table
     mcp._get_document = router.get_document
     mcp._list_versions = router.list_versions
+    mcp._delete = router.delete
     mcp._ingest = router.ingest
     return mcp
 

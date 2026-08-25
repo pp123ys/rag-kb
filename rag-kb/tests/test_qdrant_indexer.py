@@ -231,3 +231,31 @@ def test_fetch_round_trip(indexer):
     assert got.source == "a.pdf"
     # 不存在的 chunk_id → None
     assert indexer.fetch("d1-v9.9-999") is None
+
+
+@pytest.mark.integration
+def test_delete_by_doc_id_removes_only_that_doc(indexer):
+    """delete_by_doc_id：只删该文档的 chunk，其他文档不受影响。"""
+    indexer.recreate()
+    chunks = [
+        Chunk(chunk_id=_cid(1), doc_id="d1", doc_type="pdf", source="a.pdf",
+              text="文档一内容", version="v1.0", effective_date="2026-01-01"),
+        Chunk(chunk_id=_cid(2), doc_id="d1", doc_type="pdf", source="a.pdf",
+              text="文档一另一块", version="v1.0", effective_date="2026-01-01"),
+        Chunk(chunk_id=_cid(3), doc_id="d2", doc_type="pdf", source="b.pdf",
+              text="文档二内容", version="v1.0", effective_date="2026-01-01"),
+    ]
+    indexer.upsert(chunks, embeddings=[[0.1, 0.2], [0.2, 0.1], [0.3, 0.3]])
+    assert indexer.count_by_doc_id("d1") == 2
+    assert indexer.count_by_doc_id("d2") == 1
+
+    payloads = indexer.fetch_payloads_by_doc_id("d1")
+    assert len(payloads) == 2
+    assert {p["doc_id"] for p in payloads} == {"d1"}
+
+    n = indexer.delete_by_doc_id("d1")
+    assert n == 2
+    assert indexer.count_by_doc_id("d1") == 0
+    assert indexer.count_by_doc_id("d2") == 1  # 其他文档不受影响
+    # 幂等：再删已删文档返回 0
+    assert indexer.delete_by_doc_id("d1") == 0

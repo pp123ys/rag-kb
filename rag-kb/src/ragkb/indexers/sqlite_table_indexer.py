@@ -33,7 +33,8 @@ class SqliteTableIndexer:
                     headers TEXT NOT NULL,      -- JSON 数组
                     rows TEXT NOT NULL,         -- JSON 二维数组
                     source TEXT NOT NULL,
-                    headers_text TEXT NOT NULL
+                    headers_text TEXT NOT NULL,
+                    doc_id TEXT NOT NULL DEFAULT ''
                 )
             """)
             conn.execute("""
@@ -45,6 +46,13 @@ class SqliteTableIndexer:
                     PRIMARY KEY (doc_id, version)
                 )
             """)
+            # 旧表迁移：doc_id 列是删除/归属用，早期 schema 没有
+            cols = {r["name"] for r in conn.execute(
+                "PRAGMA table_info(tables_index)")}
+            if "doc_id" not in cols:
+                conn.execute(
+                    "ALTER TABLE tables_index "
+                    "ADD COLUMN doc_id TEXT NOT NULL DEFAULT ''")
             conn.commit()
 
     def upsert(self, table: TableData):
@@ -58,17 +66,18 @@ class SqliteTableIndexer:
         with self._conn() as conn:
             conn.execute(
                 """
-                INSERT INTO tables_index (table_id, name, headers, rows, source, headers_text)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO tables_index (table_id, name, headers, rows, source, headers_text, doc_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (table_id) DO UPDATE SET
                     name = excluded.name, headers = excluded.headers,
                     rows = excluded.rows, source = excluded.source,
-                    headers_text = excluded.headers_text
+                    headers_text = excluded.headers_text,
+                    doc_id = excluded.doc_id
                 """,
                 (table.table_id, table.name,
                  json.dumps(table.headers, ensure_ascii=False),
                  json.dumps(table.rows, ensure_ascii=False),
-                 table.source, headers_text),
+                 table.source, headers_text, table.doc_id),
             )
             conn.commit()
 
@@ -118,3 +127,15 @@ class SqliteTableIndexer:
                 (f"%{escaped}%",)).fetchall()
         return [{"table_id": r["table_id"], "name": r["name"],
                  "source": r["source"]} for r in rows]
+
+    def delete_by_doc_id(self, doc_id: str) -> dict:
+        """删除某文档的全部表格与版本登记，返回删除条数。"""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM tables_index WHERE doc_id = ?", (doc_id,))
+            tables = cur.rowcount
+            cur = conn.execute(
+                "DELETE FROM document_versions WHERE doc_id = ?", (doc_id,))
+            versions = cur.rowcount
+            conn.commit()
+        return {"tables": tables, "versions": versions}

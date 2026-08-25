@@ -5,9 +5,9 @@ import uuid
 import jieba
 from qdrant_client import QdrantClient
 from qdrant_client.models import (Distance, FieldCondition, Filter,
-                                  MatchValue, PointStruct, SparseIndexParams,
-                                  SparseVector, SparseVectorParams,
-                                  VectorParams)
+                                  FilterSelector, MatchValue, PointStruct,
+                                  SparseIndexParams, SparseVector,
+                                  SparseVectorParams, VectorParams)
 
 from ragkb.models import Chunk
 
@@ -223,3 +223,41 @@ class QdrantIndexer:
                 image_id=payload.get("image_id"),
             ))
         return out
+
+    @staticmethod
+    def _doc_filter(doc_id: str) -> Filter:
+        return Filter(must=[FieldCondition(
+            key="doc_id", match=MatchValue(value=doc_id))])
+
+    def count_by_doc_id(self, doc_id: str) -> int:
+        """某文档在库中的 chunk 数（删除前的数量统计）。"""
+        self.ensure_collection()
+        return self._client.count(
+            self._collection, count_filter=self._doc_filter(doc_id)).count
+
+    def fetch_payloads_by_doc_id(self, doc_id: str) -> list[dict]:
+        """scroll 取回某文档全部 chunk 的 payload（删除图片、审计用）。"""
+        self.ensure_collection()
+        out: list[dict] = []
+        offset = None
+        while True:
+            points, offset = self._client.scroll(
+                self._collection,
+                scroll_filter=self._doc_filter(doc_id),
+                with_payload=True, limit=256, offset=offset,
+            )
+            out.extend(p.payload or {} for p in points)
+            if offset is None:
+                break
+        return out
+
+    def delete_by_doc_id(self, doc_id: str) -> int:
+        """删除某文档的全部 chunk，返回删除点数。"""
+        self.ensure_collection()
+        n = self.count_by_doc_id(doc_id)
+        if n:
+            self._client.delete(
+                self._collection,
+                points_selector=FilterSelector(filter=self._doc_filter(doc_id)),
+            )
+        return n
