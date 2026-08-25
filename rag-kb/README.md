@@ -32,11 +32,13 @@
 
 | 工具 | 用途 |
 |------|------|
-| `ingest_document` | 入库文档（解析→清洗→切块→嵌入→向量/表格/图片入库） |
+| `ingest_document` | 入库文档（pdf / xlsx / eml / msg / md / csv） |
 | `search` | 双路召回 + RRF + 重排，返回带 source 的上下文（版本/权限过滤为预留能力） |
 | `retrieve_table` | 表格精确取数 / 按表头查表 |
 | `get_document` | 取回原文块 / 图片原图 |
 | `list_versions` | 文档版本历史 |
+
+> Markdown 与 CSV 的表格会自动进表格索引（`retrieve_table` 可查）；正文照常语义检索。
 
 ## 防幻觉约定
 

@@ -256,6 +256,22 @@ def test_ingest_skip_embed_skips_vector_upsert_but_keeps_rest():
     assert pg.versions == [("d1", "v1.0", "2026-01-15", "fake.pdf")]
 
 
+def test_ingest_markdown_file_via_real_parser(tmp_path):
+    """真实 Markdown 解析器进完整入库链路：正文块 + 表格 A/B 路。"""
+    from ragkb.parsers.md_parser import MarkdownParser
+
+    path = tmp_path / "doc.md"
+    path.write_text("# 标题\n\n产品说明。\n\n| 型号 | 单价 |\n| --- | --- |\n| A-100 | 99 |\n",
+                    encoding="utf-8")
+    pg = _FakePg()
+    pipe = _pipeline(parser=MarkdownParser(), pg=pg)
+    idx = pipe._indexer
+    result = pipe.ingest(str(path), doc_id="d1", source="doc.md", version="v1.0")
+    assert len(idx.chunks) == 2  # 正文块 + 表格 A 路块
+    assert len(idx.tables) == 1  # 表格 B 路
+    assert result == {"doc_id": "d1", "chunks": 2, "tables": 1}
+
+
 def test_cli_module_executes_via_python_dash_m():
     """Task 18 回归：`python -m ragkb.pipeline.ingest` 必须真正执行 main()
     （曾因缺少 __main__ 守卫而静默空转，冒烟测试发现）。"""

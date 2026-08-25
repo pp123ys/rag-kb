@@ -44,4 +44,10 @@ def parse_document(path: str, doc_id: str, source: str, **meta) -> ParsedDocumen
     if ext in ("eml", "msg"):
         from ragkb.parsers.email_parser import EmailParser
         return EmailParser().parse(path, doc_id=doc_id, source=source, **meta)
+    if ext == "md":
+        from ragkb.parsers.md_parser import MarkdownParser
+        return MarkdownParser().parse(path, doc_id=doc_id, source=source, **meta)
+    if ext == "csv":
+        from ragkb.parsers.csv_parser import CsvParser
+        return CsvParser().parse(path, doc_id=doc_id, source=source, **meta)
     raise ValueError(f"不支持的文档类型: {ext}")

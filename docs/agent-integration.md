@@ -54,7 +54,7 @@ py -3.12 -m ragkb.mcp_server.server --transport both
 
 | 工具 | 用途 | 关键入参 |
 |------|------|----------|
-| `ingest_document` | 入库文档（解析→清洗→切块→嵌入→入库） | `path`（必填，server 侧路径）、`source`、`department`、`version`、`effective_date`、`skip_embed` |
+| `ingest_document` | 入库文档（pdf / xlsx / eml / msg / md / csv） | `path`（必填，server 侧路径）、`source`、`department`、`version`、`effective_date`、`skip_embed` |
 | `search` | 语义+关键词混合检索，返回带出处上下文 | `query`（必填）、`top_k`（默认5）、`version`（可选，查指定版本） |
 | `retrieve_table` | 表格精确取数 / 按表头查表 | `table_id` 或 `query` |
 | `get_document` | 取回原文块 / 图片原图 | `chunk_id` 或 `image_id` |

@@ -270,3 +270,129 @@ def test_email_parser_omits_empty_subject_line(tmp_path):
     result = EmailParser().parse(str(path), doc_id="d7", source="m_nosubject.eml")
     assert "主题：" not in result.text
     assert "正文内容" in result.text
+
+
+# ---- Markdown 与 CSV 解析器 ----
+
+from ragkb.parsers.csv_parser import CsvParser
+from ragkb.parsers.md_parser import MarkdownParser
+
+
+def test_md_parser_extracts_body_and_table(tmp_path):
+    path = tmp_path / "notes.md"
+    path.write_text("""# 报价说明
+
+产品型号 A-100 单价 99 元。
+
+| 型号 | 单价 |
+| --- | --- |
+| A-100 | 99 |
+| B-200 | 199 |
+""", encoding="utf-8")
+    result = MarkdownParser().parse(str(path), doc_id="d1", source="notes.md")
+    assert result.doc_type == "markdown"
+    assert "产品型号 A-100 单价 99 元" in result.text
+    assert "| 型号 | 单价 |" not in result.text  # 表格行已从正文剔除
+    assert result.tables[0].headers == ["型号", "单价"]
+    assert result.tables[0].rows == [["A-100", "99"], ["B-200", "199"]]
+    assert result.tables[0].source == "notes.md:md"
+
+
+def test_md_parser_multiple_tables_unique_ids(tmp_path):
+    path = tmp_path / "multi.md"
+    path.write_text("""| a | b |
+| --- | --- |
+| 1 | 2 |
+
+| c | d |
+| --- | --- |
+| 3 | 4 |
+""", encoding="utf-8")
+    result = MarkdownParser().parse(str(path), doc_id="d1", source="multi.md")
+    assert [t.table_id for t in result.tables] == ["multi.md-0", "multi.md-1"]
+    assert result.tables[1].headers == ["c", "d"]
+
+
+def test_md_parser_row_width_aligned(tmp_path):
+    path = tmp_path / "ragged.md"
+    path.write_text("""| 型号 | 单价 | 库存 |
+| --- | --- | --- |
+| A-100 | 99 |
+| B-200 | 199 | 10 | 999 |
+""", encoding="utf-8")
+    result = MarkdownParser().parse(str(path), doc_id="d1", source="ragged.md")
+    t = result.tables[0]
+    assert t.rows[0] == ["A-100", "99", "N/A"]   # 短行补 N/A
+    assert t.rows[1] == ["B-200", "199", "10"]   # 长行截断
+
+
+def test_md_parser_plain_text_without_tables(tmp_path):
+    path = tmp_path / "plain.md"
+    path.write_text("# 标题\n\n普通段落没有表格。", encoding="utf-8")
+    result = MarkdownParser().parse(str(path), doc_id="d1", source="plain.md")
+    assert result.tables == []
+    assert "普通段落没有表格" in result.text
+
+
+def test_md_parser_gbk_encoding(tmp_path):
+    path = tmp_path / "gbk.md"
+    path.write_bytes("中文内容".encode("gbk"))
+    result = MarkdownParser().parse(str(path), doc_id="d1", source="gbk.md")
+    assert "中文内容" in result.text
+
+
+def test_csv_parser_header_and_rows(tmp_path):
+    path = tmp_path / "prices.csv"
+    path.write_text("型号,单价\nA-100,99\nB-200,199\n", encoding="utf-8")
+    result = CsvParser().parse(str(path), doc_id="d2", source="prices.csv")
+    assert result.doc_type == "csv"
+    assert result.tables[0].headers == ["型号", "单价"]
+    assert result.tables[0].rows == [["A-100", "99"], ["B-200", "199"]]
+    assert result.tables[0].source == "prices.csv:csv"
+
+
+def test_csv_parser_bom_and_semicolon(tmp_path):
+    # BOM + 分号分隔符（Sniffer 探测，非默认逗号）
+    path = tmp_path / "semi.csv"
+    path.write_bytes("\ufeff型号;单价\nA-100;99\n".encode("utf-8"))
+    result = CsvParser().parse(str(path), doc_id="d2", source="semi.csv")
+    t = result.tables[0]
+    assert t.headers == ["型号", "单价"]
+    assert t.rows == [["A-100", "99"]]
+
+
+def test_csv_parser_row_width_aligned(tmp_path):
+    path = tmp_path / "ragged.csv"
+    path.write_text("型号,单价,库存\nA-100,99\nB-200,199,10,999\n",
+                    encoding="utf-8")
+    result = CsvParser().parse(str(path), doc_id="d2", source="ragged.csv")
+    t = result.tables[0]
+    assert t.rows[0] == ["A-100", "99", "N/A"]
+    assert t.rows[1] == ["B-200", "199", "10"]
+
+
+def test_csv_parser_empty_rows_skipped(tmp_path):
+    path = tmp_path / "blank.csv"
+    path.write_text("型号,单价\n\nA-100,99\n\n", encoding="utf-8")
+    result = CsvParser().parse(str(path), doc_id="d2", source="blank.csv")
+    assert result.tables[0].rows == [["A-100", "99"]]
+
+
+def test_parse_document_routes_md_and_csv(tmp_path):
+    md = tmp_path / "n.md"
+    md.write_text("# 标题\n| a | b |\n| --- | --- |\n| 1 | 2 |\n",
+                  encoding="utf-8")
+    csvf = tmp_path / "n.csv"
+    csvf.write_text("a,b\n1,2\n", encoding="utf-8")
+    md_doc = parse_document(str(md), doc_id="d1", source="n.md",
+                            department="技术部", version="v1",
+                            effective_date="2026-01-01")
+    csv_doc = parse_document(str(csvf), doc_id="d2", source="n.csv",
+                             department="市场部", version="v2",
+                             effective_date="2026-02-01")
+    assert md_doc.doc_type == "markdown"
+    assert md_doc.department == "技术部"
+    assert md_doc.tables[0].headers == ["a", "b"]
+    assert csv_doc.doc_type == "csv"
+    assert csv_doc.department == "市场部"
+    assert csv_doc.tables[0].rows == [["1", "2"]]
