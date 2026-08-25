@@ -70,3 +70,39 @@ def test_list_versions_returns_history():
                           version_store=FakeVersionStore())
     out = server._list_versions("d1")
     assert len(out["versions"]) == 2
+
+
+class _FakeMinio:
+    def get(self, image_id):
+        return b"\x89PNG raw"
+
+
+def test_get_document_returns_base64_image():
+    import base64
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
+                          minio=_FakeMinio())
+    out = server._get_document(image_id="i1")
+    assert out["image_id"] == "i1"
+    assert base64.b64decode(out["data_base64"]) == b"\x89PNG raw"
+
+
+def test_retrieve_table_header_search():
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg())
+    out = server._retrieve_table(query="型号")
+    assert out["tables"][0]["table_id"] == "t1"
+
+
+class _NoSourceRetriever:
+    def retrieve(self, query, query_vec, top_k=50, top_n=20, top_m=5,
+                 must_not_versions=None):
+        return [Chunk(chunk_id="c9", doc_id="d9", doc_type="pdf",
+                      source="", text="无来源内容",
+                      version="v1.0", effective_date="2026-01-01")]
+
+
+def test_search_filters_chunks_without_source():
+    server = build_server(retriever=_NoSourceRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder())
+    result = server._search("测试", top_k=3)
+    assert result["results"] == []
+    assert result["empty_reason"] == "no_hits"

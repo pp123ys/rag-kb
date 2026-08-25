@@ -9,6 +9,7 @@ from ragkb.embedder import Embedder
 from ragkb.indexers import QdrantIndexer
 from ragkb.indexers.minio_store import MinioImageStore
 from ragkb.indexers.pg_table_indexer import PgTableIndexer
+from ragkb.reranker import Reranker
 from ragkb.retriever import Retriever
 
 logger = logging.getLogger(__name__)
@@ -33,26 +34,32 @@ class _QueryRouter:
         self._indexer = indexer or QdrantIndexer(self._settings)
         self._embedder = embedder or Embedder(self._settings.embed_model)
         self._pg = pg or PgTableIndexer(self._settings.pg_dsn)
-        self._retriever = retriever or Retriever(indexer=self._indexer)
+        # 默认链路接真实重排器（懒加载，零启动成本）；测试注入 retriever 时保持原样
+        self._retriever = retriever or Retriever(
+            indexer=self._indexer, reranker=Reranker(self._settings.rerank_model))
         self._version_store = version_store or VersionStore(self._pg)
         self._minio = minio or MinioImageStore(self._settings)
 
     def search(self, query: str, top_k: int = 5,
                version: str | None = None,
                department: str | None = None) -> dict:
-        """主检索：向量 + 关键词 + RRF + 重排 + 版本过滤，返回带出处上下文。"""
+        """双路召回 + RRF + 重排，返回带出处上下文。版本过滤与权限过滤为预留能力。"""
         query_vec = self._embedder.embed([query])[0].tolist()
         # 关键字传参：兼容测试替身（**kw）与真实 Retriever 签名
         chunks = self._retriever.retrieve(query=query, query_vec=query_vec,
                                           top_m=top_k)
         if not chunks:
             return {"results": [], "empty_reason": "no_hits"}
-        return {"results": [
+        # 防幻觉硬保证（§6.1.1）：无来源的 chunk 一律不返回
+        results = [
             {"chunk_id": c.chunk_id, "text": c.text, "source": c.source,
              "doc_type": c.doc_type, "version": c.version,
              "effective_date": c.effective_date}
-            for c in chunks
-        ]}
+            for c in chunks if c.source
+        ]
+        if not results:
+            return {"results": [], "empty_reason": "no_hits"}
+        return {"results": results}
 
     def retrieve_table(self, table_id: str = "",
                        query: str | None = None,
