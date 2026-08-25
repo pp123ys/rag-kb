@@ -29,7 +29,9 @@ class Retriever:
         )[:top_n]
         fused = [id_to_chunk[i] for i in merged_ids if i in id_to_chunk]
 
-        # 重排（可选）
+        # 重排（可选）：空结果直接短路，避免重排器拒绝空输入
+        if not fused:
+            return []
         if self._reranker is not None:
             fused = self._reranker.rerank(query, fused)
 
