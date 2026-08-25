@@ -34,6 +34,13 @@ class PgTableIndexer:
             conn.commit()
 
     def upsert(self, table: TableData):
+        # 先校验行列数一致，避免 query 阶段 dict(zip(headers, row)) 静默丢列；
+        # 校验须在建立 DB 连接之前，保证入参错误不依赖外部服务即可暴露
+        for i, row in enumerate(table.rows, start=1):
+            if len(row) != len(table.headers):
+                raise ValueError(
+                    f"表格 {table.table_id} 第 {i} 行 "
+                    f"列数({len(row)}) 与表头列数({len(table.headers)})不一致")
         headers_text = " ".join(table.headers)
         with psycopg.connect(self._dsn) as conn:
             conn.execute(
@@ -66,6 +73,7 @@ class PgTableIndexer:
             conn.commit()
 
     def versions(self, doc_id: str) -> list[dict]:
+        # 排序依赖 ISO YYYY-MM-DD 字符串字典序即时间序的约定（effective_date 格式约定）
         with psycopg.connect(self._dsn) as conn:
             rows = conn.execute(
                 "SELECT version, effective_date FROM document_versions "
@@ -85,8 +93,11 @@ class PgTableIndexer:
         return [dict(zip(headers, r)) for r in row[1]]
 
     def search_headers(self, keyword: str) -> list[dict]:
+        # 转义 ILIKE 通配符（% 和 _）与转义符本身，避免用户关键字被当作通配符匹配
+        escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         with psycopg.connect(self._dsn) as conn:
             rows = conn.execute(
                 "SELECT table_id, name, source FROM tables_index "
-                "WHERE headers_text ILIKE %s", (f"%{keyword}%",)).fetchall()
+                "WHERE headers_text ILIKE %s ESCAPE '\\'",
+                (f"%{escaped}%",)).fetchall()
         return [{"table_id": r[0], "name": r[1], "source": r[2]} for r in rows]
