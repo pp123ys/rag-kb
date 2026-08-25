@@ -11,8 +11,10 @@ def _cid(n: int) -> str:
 
 @pytest.fixture
 def indexer(settings):
-    # 集成测试用小维度向量（2 维）代替真实 BGE-M3 1024 维，集合维度须一致
+    # 集成测试用小维度向量（2 维）代替真实 BGE-M3 1024 维，集合维度须一致；
+    # 且用独立 collection 名，避免 recreate() 摧毁生产集合（chunks）
     settings.vector_size = 2
+    settings.collection_name = "chunks_test"
     return QdrantIndexer(settings)
 
 

@@ -59,6 +59,9 @@ class _ReverseReranker:
     def rerank(self, query, chunks):
         return list(reversed(chunks))
 
+    def rerank_scored(self, query, chunks):
+        return [(c, float(len(chunks) - i)) for i, c in enumerate(reversed(chunks))]
+
 
 def test_retriever_reranker_output_takes_effect():
     dense = [_chunk("c1", "一"), _chunk("c2", "二"), _chunk("c3", "三")]
@@ -84,6 +87,11 @@ class _NoEmptyReranker:
         if not chunks:
             raise AssertionError("rerank 不应收到空列表")
         return chunks
+
+    def rerank_scored(self, query, chunks):
+        if not chunks:
+            raise AssertionError("rerank 不应收到空列表")
+        return [(c, 0.5) for c in chunks]
 
 
 def test_retriever_skips_rerank_on_empty_fused():

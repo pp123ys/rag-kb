@@ -83,7 +83,8 @@ class _QueryRouter:
 
         version 指定版本号时只返回该版本的 chunk（历史版本查询，跳过
         当前生效版本闸门）；缺省时只返回当前生效版本（PG document_versions
-        为权威）。
+        为权威）。重排分数低于 min_relevance_score 的结果判定为「没有找到」
+        （防幻觉：检索到但相关性不足时不得强行作答）。
         """
         query_vec = self._embedder.embed([query])[0].tolist()
         if version:
@@ -93,19 +94,26 @@ class _QueryRouter:
             vfilter = self._version_filter
         # 关键字传参：兼容测试替身（**kw）与真实 Retriever 签名；
         # version_filter 按调用覆盖 Retriever 构造注入的默认过滤
-        chunks = self._retriever.retrieve(query=query, query_vec=query_vec,
-                                          top_m=top_k, version_filter=vfilter)
-        # 结果侧再兜底执行同一版本闸门（覆盖测试注入的自定义 retriever 场景，
-        # 保证任何检索器结果都过版本闸门）
-        chunks = vfilter(chunks)
-        if not chunks:
+        scored = self._retriever.retrieve_scored(
+            query=query, query_vec=query_vec,
+            top_m=top_k, version_filter=vfilter)
+        # 结果侧兜底执行版本闸门（覆盖测试注入的自定义 retriever 场景与
+        # 未透传 version_filter 的检索器，保证任何检索器结果都过版本闸门）
+        kept_ids = {c.chunk_id for c in vfilter([c for c, _ in scored])}
+        scored = [(c, sc) for c, sc in scored if c.chunk_id in kept_ids]
+        # 相关性阈值（仅当有重排分数时生效；无重排器时不做阈值判定）
+        min_score = self._settings.min_relevance_score
+        if scored and all(sc is not None for _, sc in scored):
+            scored = [(c, sc) for c, sc in scored
+                      if sc is not None and sc >= min_score]
+        if not scored:
             return {"results": [], "empty_reason": "no_hits"}
         # 防幻觉硬保证（§6.1.1）：无来源的 chunk 一律不返回
         results = [
             {"chunk_id": c.chunk_id, "text": c.text, "source": c.source,
              "doc_type": c.doc_type, "version": c.version,
-             "effective_date": c.effective_date}
-            for c in chunks if c.source
+             "effective_date": c.effective_date, "score": sc}
+            for c, sc in scored if c.source
         ]
         if not results:
             return {"results": [], "empty_reason": "no_hits"}

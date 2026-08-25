@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     rrf_k: int = 60                    # RRF 常数
     top_n_rerank: int = 20             # 融合后送重排的条数
     top_m_context: int = 5             # 重排后进上下文的条数
+    min_relevance_score: float = 0.1   # 重排分数阈值：低于则判定「没有找到」（防幻觉）
 
 
 @lru_cache

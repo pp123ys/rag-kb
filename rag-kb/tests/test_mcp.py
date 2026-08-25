@@ -23,6 +23,12 @@ class _FakeRetriever:
                       source="a.pdf:3", text="产品型号 A-100 单价 99 元。",
                       version="v2.0", effective_date="2026-06-01")]
 
+    def retrieve_scored(self, query, query_vec, top_k=50, top_n=20, top_m=5,
+                        must_not_versions=None, **kwargs):
+        return [(c, 0.9) for c in self.retrieve(
+            query, query_vec, top_k=top_k, top_n=top_n, top_m=top_m,
+            must_not_versions=must_not_versions)]
+
 
 class _FakePg:
     def query(self, table_id):
@@ -49,6 +55,9 @@ def test_search_tool_returns_sourced_context():
 def test_search_tool_empty_result_reports_reason():
     class EmptyRetriever:
         def retrieve(self, **kw):
+            return []
+
+        def retrieve_scored(self, **kw):
             return []
 
     server = build_server(retriever=EmptyRetriever(), pg=_FakePg(),
@@ -103,6 +112,12 @@ class _NoSourceRetriever:
                       source="", text="无来源内容",
                       version="v1.0", effective_date="2026-01-01")]
 
+    def retrieve_scored(self, query, query_vec, top_k=50, top_n=20, top_m=5,
+                        must_not_versions=None, **kwargs):
+        return [(c, 0.9) for c in self.retrieve(
+            query, query_vec, top_k=top_k, top_n=top_n, top_m=top_m,
+            must_not_versions=must_not_versions)]
+
 
 def test_search_filters_chunks_without_source():
     server = build_server(retriever=_NoSourceRetriever(), pg=_FakePg(),
@@ -110,6 +125,30 @@ def test_search_filters_chunks_without_source():
     result = server._search("测试", top_k=3)
     assert result["results"] == []
     assert result["empty_reason"] == "no_hits"
+
+
+def test_search_below_relevance_threshold_reports_no_hits():
+    """防幻觉：重排分数低于 min_relevance_score 的结果判定为「没有找到」。"""
+
+    class _LowScoreRetriever:
+        def retrieve_scored(self, query, query_vec, top_k=50, top_n=20,
+                            top_m=5, must_not_versions=None, **kwargs):
+            return [(Chunk(chunk_id="c1", doc_id="d1", doc_type="pdf",
+                           source="a.pdf:3", text="低相关内容",
+                           version="v1.0", effective_date="2026-01-01"), 0.02)]
+
+    server = build_server(retriever=_LowScoreRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder())
+    result = server._search("完全不相关的问题", top_k=3)
+    assert result["results"] == []
+    assert result["empty_reason"] == "no_hits"
+
+
+def test_search_above_threshold_returns_score():
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder())
+    result = server._search("A-100 单价多少", top_k=3)
+    assert result["results"][0]["score"] == 0.9
 
 
 class _VersionPg:
@@ -158,6 +197,12 @@ class _TwoVersionRetriever:
             Chunk(chunk_id="new", doc_id="d1", doc_type="pdf", source="a.pdf",
                   text="新版内容", version="v2.0", effective_date="2026-06-01"),
         ]
+
+    def retrieve_scored(self, query, query_vec, top_k=50, top_n=20, top_m=5,
+                        must_not_versions=None, **kwargs):
+        return [(c, 0.9) for c in self.retrieve(
+            query, query_vec, top_k=top_k, top_n=top_n, top_m=top_m,
+            must_not_versions=must_not_versions)]
 
 
 class _VersionedPg(_FakePg):
