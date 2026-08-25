@@ -1,4 +1,9 @@
 # 入库编排流水线：全部注入 fake，只验证编排逻辑（解析→OCR→切块→嵌入→入库→版本登记）。
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from ragkb.models import ImageData, ParsedDocument, TableData
 from ragkb.ocr import OCRUnavailableError
 from ragkb.pipeline.ingest import IngestPipeline
@@ -207,3 +212,30 @@ def test_ingest_skips_embedding_when_no_chunks():
     assert idx.chunks == []
     assert len(idx.tables) == 1  # 表格 B 路独立于正文继续入库
     assert embedder.calls == 0
+
+
+def test_ingest_skip_embed_skips_vector_upsert_but_keeps_rest():
+    """--skip-embed：不嵌入、不向量入库，表格/版本等其余链路照常（冒烟用）。"""
+    embedder = _FakeEmbedder()
+    pg = _FakePg()
+    pipe = _pipeline(embedder=embedder, pg=pg)
+    idx = pipe._indexer
+    pipe.ingest("/tmp/fake.pdf", doc_id="d1", source="fake.pdf",
+                version="v1.0", effective_date="2026-01-15",
+                skip_embed=True)
+    assert idx.chunks == []          # 向量入库被跳过
+    assert embedder.calls == 0       # 嵌入器未被调用
+    assert len(idx.tables) == 1      # 表格仍入库
+    assert pg.versions == [("d1", "v1.0", "2026-01-15", "fake.pdf")]
+
+
+def test_cli_module_executes_via_python_dash_m():
+    """Task 18 回归：`python -m ragkb.pipeline.ingest` 必须真正执行 main()
+    （曾因缺少 __main__ 守卫而静默空转，冒烟测试发现）。"""
+    env = dict(os.environ,
+               PYTHONPATH=str(Path(__file__).parent.parent / "src"))
+    proc = subprocess.run(
+        [sys.executable, "-m", "ragkb.pipeline.ingest", "--help"],
+        capture_output=True, text=True, env=env, timeout=60)
+    assert proc.returncode == 0
+    assert "--skip-embed" in proc.stdout  # main() 的 argparse 已生效

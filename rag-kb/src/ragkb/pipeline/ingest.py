@@ -34,7 +34,7 @@ class IngestPipeline:
 
     def ingest(self, path: str, doc_id: str | None = None, source: str | None = None,
                department: str = "", version: str = "", effective_date: str = "",
-               parse_images: bool = True):
+               parse_images: bool = True, skip_embed: bool = False):
         doc_id = doc_id or str(uuid.uuid4())
         source = source or os.path.basename(path)
         logger.info("ingest %s (%s)", source, doc_id)
@@ -66,8 +66,14 @@ class IngestPipeline:
 
         chunks = self._chunker.chunk(parsed)
         if chunks:
-            vectors = self._embedder.embed([c.text for c in chunks])
-            self._indexer.upsert(chunks, embeddings=vectors)
+            if skip_embed:
+                # 无模型缓存的机器（冒烟/CI）跳过嵌入与向量入库，其余链路照常
+                logger.warning(
+                    "skip_embed：跳过嵌入与向量入库（%d 个 chunk 未写入 Qdrant）",
+                    len(chunks))
+            else:
+                vectors = self._embedder.embed([c.text for c in chunks])
+                self._indexer.upsert(chunks, embeddings=vectors)
 
         for table in parsed.tables:
             self._indexer.upsert_table(table) if hasattr(self._indexer, "upsert_table") \
@@ -91,9 +97,17 @@ def main():
     ap.add_argument("--department", default="")
     ap.add_argument("--version", default="")
     ap.add_argument("--effective-date", default="")
+    ap.add_argument("--skip-embed", action="store_true",
+                    help="跳过嵌入与向量入库（无模型下载环境的冒烟验证）")
     args = ap.parse_args()
     pipe = IngestPipeline(ocr=OCRClient())
     result = pipe.ingest(args.path, doc_id=args.doc_id, source=args.source,
                          department=args.department, version=args.version,
-                         effective_date=args.effective_date)
+                         effective_date=args.effective_date,
+                         skip_embed=args.skip_embed)
     print(result)
+
+
+if __name__ == "__main__":
+    # 缺此守卫时 `python -m ragkb.pipeline.ingest` 会静默空转（Task 18 冒烟发现）
+    main()

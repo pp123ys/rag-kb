@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
+# 冒烟脚本生成的样例文档
+tests/fixtures/
