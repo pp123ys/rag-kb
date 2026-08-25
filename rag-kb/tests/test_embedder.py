@@ -20,3 +20,10 @@ def test_embedder_interface_with_fake():
     e = Embedder(model_name="fake", encoder=_FakeEncoder())
     vecs = e.embed(["a", "b"])
     assert vecs.shape == (2, 4)
+
+
+def test_embedder_empty_input_returns_empty_array():
+    e = Embedder(model_name="fake", encoder=_FakeEncoder())
+    out = e.embed([])
+    assert out.shape == (0, 0)
+    assert out.dtype == np.float32
