@@ -35,6 +35,9 @@ ragkb-mcp = "ragkb.mcp_server.server:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+ragkb = ["prompts/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
