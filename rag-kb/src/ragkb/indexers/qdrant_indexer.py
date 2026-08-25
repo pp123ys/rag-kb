@@ -1,5 +1,5 @@
+import hashlib
 import re
-import zlib
 
 import jieba
 from qdrant_client import QdrantClient
@@ -19,19 +19,26 @@ def tokenize(text: str) -> list[str]:
     """中文分词（jieba），供稀疏向量与 BM25 关键词召回使用。
 
     保留多字 token（中文词、数字串）以及单字符字母/数字 token，
-    以便型号/合同号（如 A-100、HT-2026-001）可召回。
+    以便型号/合同号（如 A-100、HT-2026-001）可召回；
+    纯标点/符号串（如 "---"、"！？"）整体丢弃。
     """
     return [w for w in jieba.cut(text)
-            if (len(w) > 1 or _ALNUM_RE.fullmatch(w))]
+            if (len(w) > 1 or _ALNUM_RE.fullmatch(w))
+            and any(ch.isalnum() for ch in w)]
 
 
 def _token_index(token: str) -> int:
-    """token → 全局稳定索引（crc32 哈希）。
+    """token → 全局稳定索引（跨文档一致）。
 
     注意：不能按文档局部建 vocab（同一 token 在不同文档会得到不同索引），
     否则 query 的稀疏向量无法与已入库文档对齐。用确定性哈希保证跨文档一致。
+
+    索引必须落在 Qdrant 稀疏向量允许的 u32 范围 [0, 2^32)（服务器 1.9.7
+    实测拒绝 ≥ 2^32 的索引），因此取 md5 前 4 字节作 32 位整数——
+    相比旧 crc32 的 31 位截断空间翻倍，碰撞概率减半。
     """
-    return zlib.crc32(token.encode("utf-8")) & 0x7FFFFFFF
+    digest = hashlib.md5(token.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big")
 
 
 def _sparse(text: str) -> SparseVector:
@@ -51,14 +58,13 @@ class QdrantIndexer:
 
     def __init__(self, settings, client: QdrantClient | None = None):
         self._settings = settings
-        self._client = client or QdrantClient(url=settings.qdrant_url)
+        # check_compatibility=False：客户端 1.19 与 docker-compose 锁定的服务器
+        # 1.9.7 存在版本差，默认会每次连接都打兼容性告警；此处显式关闭该检查
+        # （服务端协议稳定，版本差不影响本客户端用到的 API）。
+        self._client = client or QdrantClient(
+            url=settings.qdrant_url, check_compatibility=False)
         self._collection = settings.collection_name
         self._size = settings.vector_size
-
-    @staticmethod
-    def point_id(chunk_id: str) -> int:
-        """chunk_id → Qdrant 合法点 ID（仅接受无符号整数或 UUID）。"""
-        return zlib.crc32(chunk_id.encode("utf-8")) & 0x7FFFFFFF
 
     def ensure_collection(self):
         if self._client.collection_exists(self._collection):
@@ -73,6 +79,11 @@ class QdrantIndexer:
                 )
             },
         )
+        # doc_id/version 是 version_filter 的常用过滤字段，建 keyword 索引提升过滤性能
+        self._client.create_payload_index(
+            self._collection, field_name="doc_id", field_schema="keyword")
+        self._client.create_payload_index(
+            self._collection, field_name="version", field_schema="keyword")
 
     def recreate(self):
         if self._client.collection_exists(self._collection):
@@ -81,15 +92,20 @@ class QdrantIndexer:
 
     def upsert(self, chunks: list[Chunk], embeddings: list[list[float]]):
         self.ensure_collection()
+        if len(chunks) != len(embeddings):
+            raise ValueError(
+                f"chunks({len(chunks)}) 与 embeddings({len(embeddings)}) 数量不一致")
         points = []
-        for chunk, vec in zip(chunks, embeddings):
+        for chunk, vec in zip(chunks, embeddings, strict=True):
             payload = chunk.metadata()
             points.append(PointStruct(
-                id=self.point_id(chunk.chunk_id),
+                id=chunk.chunk_id,  # chunk_id 即 uuid4，直接作点 ID，无 crc32 碰撞
                 vector={"": vec, "bm25": _sparse(chunk.text)},
                 payload=payload,
             ))
-        self._client.upsert(self._collection, points=points)
+        # 分批 upsert，避免单请求超出 Qdrant 约 32MB 请求体上限
+        for i in range(0, len(points), 256):
+            self._client.upsert(self._collection, points=points[i:i + 256])
 
     @staticmethod
     def _version_filter(must_not_versions: dict[str, str] | None):
