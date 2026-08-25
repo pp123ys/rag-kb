@@ -36,8 +36,10 @@ cd D:\text\rag\rag-kb
 py -3.12 -m ragkb.mcp_server.server --transport http
 ```
 
-监听 `0.0.0.0:8000`，MCP 端点为 `POST http://<host>:8000/mcp`
-（streamable HTTP，需先 GET /mcp 建立会话再 POST 初始化，标准 MCP 客户端自动处理）。
+- 默认监听 `127.0.0.1:8000`（仅本机）；跨机器访问加 `--host 0.0.0.0`：
+  `py -3.12 -m ragkb.mcp_server.server --transport http --host 0.0.0.0 --port 8000`
+- MCP 端点为 `POST http://<host>:8000/mcp`
+  （streamable HTTP，需先 GET /mcp 建立会话再 POST 初始化，标准 MCP 客户端自动处理）。
 
 ### 2.3 两种都支持
 
@@ -184,12 +186,14 @@ asyncio.run(main())
 ```python
 import asyncio
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 
 async def main():
     url = "http://localhost:8000/mcp"
-    async with streamablehttp_client(url) as (read, write):
+    # mcp>=1.29：streamable_http_client（下划线版）返回 (read, write, get_session_id) 三元组；
+    # 旧名 streamablehttp_client 已废弃且仅返回两元组
+    async with streamable_http_client(url) as (read, write, _get_session_id):
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await session.list_tools()
@@ -262,8 +266,10 @@ search('A-100 单价多少'):
 | 问题 | 解决 |
 |------|------|
 | `ModuleNotFoundError: ragkb` | cwd 不在 rag-kb/；用包装器 .cmd 脚本或显式 cwd |
+| `Storage folder data/qdrant is already accessed by another instance` | 嵌入式 Qdrant 单进程独占：HTTP server 运行期间不能同时跑 pytest/入库 CLI；停掉其一即可 |
 | 首次调用慢（30s+） | 正常：模型加载到内存；后续调用快 |
 | 内存占用 2-3GB | BGE-M3 + reranker 常驻；多 agent 用 HTTP 共享实例 |
 | `HF_ENDPOINT` 未设置导致模型下载失败 | 网络受限时设 `https://hf-mirror.com` |
+| 模型加载时联网超时重试/卡住 | stdio 子进程不继承父进程 env；在配置 `env` 里加 `HF_HUB_OFFLINE=1`（离线）或设对 `HF_ENDPOINT` |
 | 检索结果为空 | 确认文档已入库（含嵌入，勿用 `--skip-embed`）；或问题确实超出知识库（防幻觉阈值过滤） |
 | `Empty results` + `empty_reason` | 知识库无相关内容或重排分数低于阈值 0.1，属正常防幻觉行为 |

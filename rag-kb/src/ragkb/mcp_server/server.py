@@ -176,14 +176,17 @@ class _QueryRouter:
 
 def build_server(retriever=None, pg=None, embedder=None, indexer=None,
                  version_store=None, minio=None, settings=None,
-                 ingest_pipeline=None):
-    """构造 FastMCP 服务，注册五个工具（检索 + 入库）。"""
+                 ingest_pipeline=None, host="127.0.0.1", port=8000):
+    """构造 FastMCP 服务，注册五个工具（检索 + 入库）。
+
+    host/port 仅 HTTP 模式生效（FastMCP streamable-http 监听地址）。
+    """
     router = _QueryRouter(retriever=retriever, pg=pg, embedder=embedder,
                           indexer=indexer, version_store=version_store,
                           minio=minio, settings=settings,
                           ingest_pipeline=ingest_pipeline)
 
-    mcp = FastMCP("ragkb")
+    mcp = FastMCP("ragkb", host=host, port=port)
 
     @mcp.tool()
     def search(query: str, top_k: int = 5, version: str | None = None) -> dict:
@@ -251,20 +254,26 @@ def main():
     ap = argparse.ArgumentParser(description="RAG 知识库 MCP Server")
     ap.add_argument("--transport", default="stdio",
                     choices=["stdio", "http", "both"])
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="HTTP 监听地址（跨机器访问用 0.0.0.0）")
+    ap.add_argument("--port", type=int, default=8000,
+                    help="HTTP 监听端口（默认 8000）")
     args = ap.parse_args()
 
-    mcp = build_server()
+    mcp = build_server(host=args.host, port=args.port)
 
     if args.transport == "both":
         # both：分别拉起两个实例（stdio 前台 + http 后台）
         import threading
-        http = build_server()
+        http = build_server(host=args.host, port=args.port)
         threading.Thread(target=http.run,
                          kwargs={"transport": _TRANSPORT["http"]},
                          daemon=True).start()
         mcp.run(transport="stdio")
+    elif args.transport == "http":
+        mcp.run(transport=_TRANSPORT["http"])
     else:
-        mcp.run(transport=_TRANSPORT[args.transport])
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
