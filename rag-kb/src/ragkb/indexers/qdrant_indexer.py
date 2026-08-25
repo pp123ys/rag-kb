@@ -19,6 +19,12 @@ _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
+# 嵌入式本地模式按绝对路径复用 client：Qdrant 嵌入式单目录有进程级文件锁，
+# 同进程内多个 QdrantClient(path=...) 指向同一目录会互斥报错。缓存后：
+# 同一路径只建一个 client，多实例（多 router / both 双传输 / 测试多用例）共享，
+# 也符合嵌入式语义（单进程单实例）。远程 url 模式不做缓存。
+_EMBEDDED_CLIENTS: dict[str, QdrantClient] = {}
+
 
 def _point_id(chunk_id: str) -> str:
     """chunk_id → 合法 Qdrant 点 ID（Qdrant 仅接受无符号整数或 UUID 字符串）。
@@ -71,15 +77,33 @@ def _sparse(text: str) -> SparseVector:
 
 
 class QdrantIndexer:
-    """Qdrant 单存储：稠密向量 + 稀疏向量（BM25）+ payload 过滤。"""
+    """Qdrant 单存储：稠密向量 + 稀疏向量（BM25）+ payload 过滤。
+
+    支持两种连接方式（由 settings 决定）：
+    - 嵌入式（免 Docker）：settings.qdrant_path 非空 → QdrantClient(path=...)，
+      数据落盘本地目录，零外部依赖；
+    - 远程服务：settings.qdrant_url → QdrantClient(url=...) 连独立 Qdrant 服务。
+    """
 
     def __init__(self, settings, client: QdrantClient | None = None):
         self._settings = settings
-        # check_compatibility=False：客户端 1.19 与 docker-compose 锁定的服务器
-        # 1.9.7 存在版本差，默认会每次连接都打兼容性告警；此处显式关闭该检查
-        # （服务端协议稳定，版本差不影响本客户端用到的 API）。
-        self._client = client or QdrantClient(
-            url=settings.qdrant_url, check_compatibility=False)
+        if client is not None:
+            self._client = client
+        elif settings.qdrant_path:
+            # 嵌入式本地模式：数据目录必须存在，否则 Qdrant 拒绝打开；
+            # client 按绝对路径复用（见 _EMBEDDED_CLIENTS 注释）
+            from pathlib import Path
+            path = str(Path(settings.qdrant_path).resolve())
+            Path(path).mkdir(parents=True, exist_ok=True)
+            if path not in _EMBEDDED_CLIENTS:
+                _EMBEDDED_CLIENTS[path] = QdrantClient(path=path)
+            self._client = _EMBEDDED_CLIENTS[path]
+        else:
+            # check_compatibility=False：客户端 1.19 与 docker-compose 锁定的服务器
+            # 1.9.7 存在版本差，默认会每次连接都打兼容性告警；此处显式关闭该检查
+            # （服务端协议稳定，版本差不影响本客户端用到的 API）。
+            self._client = QdrantClient(
+                url=settings.qdrant_url, check_compatibility=False)
         self._collection = settings.collection_name
         self._size = settings.vector_size
 

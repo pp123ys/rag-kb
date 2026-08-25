@@ -20,7 +20,7 @@ dependencies = [
     "paddlepaddle>=2.6",
     "psycopg[binary]>=3.1",
     "minio>=7.2",
-    "mcp>=1.2",
+    "mcp>=1.2,<2",  # v1 API（FastMCP）；v2 重命名 MCPServer 且接口变更，勿升
     "httpx>=0.27",
     "python-multipart>=0.0.9",
 ]

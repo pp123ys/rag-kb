@@ -8,6 +8,10 @@ __pycache__/
 tests/fixtures/
 # 本地模型缓存（项目内，不入库）
 models/
-
-# �˵�����֤��ʱ���
+# 嵌入式存储落盘（免 Docker 模式：Qdrant / SQLite / 图片）
+data/
+# 验证/探针临时产物
 e2e_*.txt
+mcp_verify.txt
+perf_probe.txt
+search_probe.txt
