@@ -6,9 +6,8 @@ import uuid
 from ragkb.chunker import Chunker
 from ragkb.config import get_settings
 from ragkb.embedder import Embedder
-from ragkb.indexers import QdrantIndexer
-from ragkb.indexers.minio_store import MinioImageStore
-from ragkb.indexers.pg_table_indexer import PgTableIndexer
+from ragkb.indexers import (QdrantIndexer, get_image_store,
+                            get_table_indexer)
 from ragkb.models import Chunk
 from ragkb.ocr import OCRClient
 from ragkb.parsers import parse_document
@@ -32,8 +31,9 @@ class IngestPipeline:
             settings.embed_model, cache_dir=settings.model_cache_dir)
         self._indexer = indexer or QdrantIndexer(settings)
         self._ocr = ocr if ocr is not None else OCRClient(settings.ocr_lang)
-        self._pg = pg or PgTableIndexer(settings.pg_dsn)
-        self._minio = minio or MinioImageStore(settings)
+        # 存储后端工厂：pg_dsn 非空用 PG，否则 SQLite；minio_endpoint 非空用 MinIO，否则本地目录
+        self._pg = pg if pg is not None else get_table_indexer(settings)
+        self._minio = minio if minio is not None else get_image_store(settings)
 
     def ingest(self, path: str, doc_id: str | None = None, source: str | None = None,
                department: str = "", version: str = "", effective_date: str = "",

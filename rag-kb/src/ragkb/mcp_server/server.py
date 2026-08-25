@@ -6,9 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ragkb.config import get_settings
 from ragkb.embedder import Embedder
-from ragkb.indexers import QdrantIndexer
-from ragkb.indexers.minio_store import MinioImageStore
-from ragkb.indexers.pg_table_indexer import PgTableIndexer
+from ragkb.indexers import QdrantIndexer, get_image_store, get_table_indexer
 from ragkb.models import Chunk
 from ragkb.reranker import Reranker
 from ragkb.retriever import Retriever
@@ -17,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class VersionStore:
-    """版本历史：从 PostgreSQL document_versions 表读取。"""
+    """版本历史：从表格/版本存储（PG 或 SQLite）的 document_versions 表读取。"""
 
     def __init__(self, pg):
         self._pg = pg
@@ -61,8 +59,8 @@ class _QueryRouter:
         self._embedder = embedder or Embedder(
             self._settings.embed_model,
             cache_dir=self._settings.model_cache_dir)
-        self._pg = pg or PgTableIndexer(self._settings.pg_dsn)
-        # 当前生效版本过滤（结果侧，PG document_versions 为权威）：
+        self._pg = pg if pg is not None else get_table_indexer(self._settings)
+        # 当前生效版本过滤（结果侧，存储端 document_versions 为权威）：
         # 注入默认 Retriever（检索链路内过滤），search 返回前再兜底执行一次
         # （覆盖测试注入的自定义 retriever 场景，保证任何检索器结果都过版本闸门）
         self._version_filter = CurrentVersionFilter(self._pg)
@@ -74,7 +72,7 @@ class _QueryRouter:
             version_filter=self._version_filter,
         )
         self._version_store = version_store or VersionStore(self._pg)
-        self._minio = minio or MinioImageStore(self._settings)
+        self._minio = minio if minio is not None else get_image_store(self._settings)
 
     def search(self, query: str, top_k: int = 5,
                version: str | None = None,

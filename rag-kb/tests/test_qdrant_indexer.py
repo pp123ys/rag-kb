@@ -10,11 +10,13 @@ def _cid(n: int) -> str:
 
 
 @pytest.fixture
-def indexer(settings):
-    # 集成测试用小维度向量（2 维）代替真实 BGE-M3 1024 维，集合维度须一致；
-    # 且用独立 collection 名，避免 recreate() 摧毁生产集合（chunks）
+def indexer(settings, tmp_path):
+    # 嵌入式本地模式（免 Docker）：数据落盘临时目录；
+    # 用小维度向量（2 维）代替真实 BGE-M3 1024 维，集合维度须一致；
+    # 独立 collection 名，避免与生产集合（chunks）冲突
     settings.vector_size = 2
     settings.collection_name = "chunks_test"
+    settings.qdrant_path = str(tmp_path / "qdrant")
     return QdrantIndexer(settings)
 
 
@@ -112,7 +114,7 @@ def test_fetch_missing_returns_none(settings):
     assert idx.fetch("d1-v1.0-9") is None
 
 
-# ---------- 集成测试（需要本地 Qdrant，docker compose） ----------
+# ---------- 集成测试（嵌入式本地 Qdrant，免 Docker） ----------
 
 @pytest.mark.integration
 def test_upsert_and_query_dense(indexer):

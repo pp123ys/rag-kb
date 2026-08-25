@@ -12,19 +12,22 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="RAGKB_", env_file=".env")
 
-    # 检索存储
+    # 检索存储（默认嵌入式，免 Docker；设 qdrant_url 并清空 qdrant_path 可切远程）
     qdrant_url: str = "http://localhost:6333"
+    qdrant_path: str = "data/qdrant"  # 非空=嵌入式本地模式（默认）；空=连 qdrant_url
     collection_name: str = "chunks"
     vector_size: int = 1024  # BGE-M3 dense 维度
 
-    # PostgreSQL（表格索引）
-    pg_dsn: str = "postgresql://ragkb:ragkb@localhost:5432/ragkb"
+    # 表格/版本存储（默认嵌入式 SQLite；设 pg_dsn 可切 PostgreSQL）
+    pg_dsn: str = ""  # 空=SQLite（默认）；非空=PostgreSQL 连接串
+    sqlite_path: str = "data/ragkb.db"
 
-    # MinIO（原图存储）
-    minio_endpoint: str = "localhost:9000"
+    # 图片存储（默认本地目录；设 minio_endpoint 可切 MinIO）
+    minio_endpoint: str = ""  # 空=本地目录（默认）；非空=MinIO 服务地址
     minio_access_key: str = "ragkb"
     minio_secret_key: str = "ragkb-secret"
     minio_bucket: str = "ragkb-images"
+    images_dir: str = "data/images"
 
     # 模型（下载与加载均走项目内目录，不占 C 盘用户缓存）
     embed_model: str = "BAAI/bge-m3"
