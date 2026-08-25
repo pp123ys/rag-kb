@@ -52,10 +52,26 @@ py -3.12 -m ragkb.mcp_server.server --transport both
 
 | 工具 | 用途 | 关键入参 |
 |------|------|----------|
+| `ingest_document` | 入库文档（解析→清洗→切块→嵌入→入库） | `path`（必填，server 侧路径）、`source`、`department`、`version`、`effective_date`、`skip_embed` |
 | `search` | 语义+关键词混合检索，返回带出处上下文 | `query`（必填）、`top_k`（默认5）、`version`（可选，查指定版本） |
 | `retrieve_table` | 表格精确取数 / 按表头查表 | `table_id` 或 `query` |
 | `get_document` | 取回原文块 / 图片原图 | `chunk_id` 或 `image_id` |
 | `list_versions` | 文档版本历史 | `doc_id` |
+
+**入库示例**（agent 拿到本地文件后调用）：
+
+```json
+{
+  "path": "D:\\docs\\报价单.pdf",
+  "department": "销售部",
+  "version": "v1.0",
+  "effective_date": "2026-01-15"
+}
+```
+
+返回 `{"doc_id": "...", "chunks": 12, "tables": 2}`，随后即可用 `search` 检索该文档。
+首次调用 `ingest_document` 会加载嵌入模型（约 15s，之后常驻）；`skip_embed=true` 可跳过
+嵌入与向量入库（无模型下载环境的降级验证）。
 
 **防幻觉契约**：`search` 返回的每条结果都带 `source`（文件名:页码/Sheet）
 与 `score`（重排相关性，低于 0.1 的结果已按「没有找到」过滤，返回空 + `empty_reason`）。
@@ -76,12 +92,18 @@ agent 回答必须逐句引用 `source`，检索不到时回答「知识库中�
       "command": "py",
       "args": ["-3.12", "-m", "ragkb.mcp_server.server", "--transport", "stdio"],
       "env": {
-        "HF_ENDPOINT": "https://hf-mirror.com"
+        "HF_ENDPOINT": "https://hf-mirror.com",
+        "HF_HOME": "D:\\text\\rag\\rag-kb\\models",
+        "RAGKB_MODEL_CACHE_DIR": "D:\\text\\rag\\rag-kb\\models"
       }
     }
   }
 }
 ```
+
+> 注意：stdio 子进程**不继承** agent 进程的环境变量，模型相关配置必须在
+> `env` 里显式给出。离线/内网环境务必加 `"HF_HUB_OFFLINE": "1"`，
+> 否则模型加载时 sentence-transformers 会联网探测并超时重试（甚至卡住）。
 
 > 注意：`cwd` 需为 `rag-kb/` 才能导入 ragkb。
 > Claude Desktop 的 stdio 配置无法直接指定 cwd —— 若遇到 ModuleNotFoundError，
@@ -95,6 +117,10 @@ agent 回答必须逐句引用 `source`，检索不到时回答「知识库中�
 @echo off
 cd /d D:\text\rag\rag-kb
 set HF_ENDPOINT=https://hf-mirror.com
+set HF_HOME=D:\text\rag\rag-kb\models
+set RAGKB_MODEL_CACHE_DIR=D:\text\rag\rag-kb\models
+rem 离线/内网环境解除下行注释，强制只用本地模型缓存
+rem set HF_HUB_OFFLINE=1
 py -3.12 -m ragkb.mcp_server.server --transport stdio
 ```
 
@@ -122,15 +148,28 @@ from mcp.client.stdio import stdio_client
 
 
 async def main():
+    # 注意：stdio_client 不继承父进程环境变量，HF/模型配置必须显式传入
     params = StdioServerParameters(
         command="py",
         args=["-3.12", "-m", "ragkb.mcp_server.server", "--transport", "stdio"],
         cwd=r"D:\text\rag\rag-kb",
-        env={"HF_ENDPOINT": "https://hf-mirror.com"},
+        env={
+            "HF_ENDPOINT": "https://hf-mirror.com",
+            "HF_HOME": r"D:\text\rag\rag-kb\models",
+            "RAGKB_MODEL_CACHE_DIR": r"D:\text\rag\rag-kb\models",
+            # "HF_HUB_OFFLINE": "1",  # 离线/内网环境解除注释
+        },
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
+            # 入库（agent 拿到本地文件后）
+            r = await session.call_tool("ingest_document", {
+                "path": r"D:\docs\报价单.pdf",
+                "department": "销售部", "version": "v1.0",
+                "effective_date": "2026-01-15",
+            })
+            print(r.content[0].text)
             # 检索
             r = await session.call_tool("search", {"query": "A-100 单价多少", "top_k": 3})
             for content in r.content:
@@ -174,12 +213,17 @@ asyncio.run(main())
       "command": "D:\\text\\rag\\rag-kb\\mcp-examples\\ragkb-mcp.cmd",
       "args": [],
       "env": {
-        "HF_ENDPOINT": "https://hf-mirror.com"
+        "HF_ENDPOINT": "https://hf-mirror.com",
+        "HF_HOME": "D:\\text\\rag\\rag-kb\\models",
+        "RAGKB_MODEL_CACHE_DIR": "D:\\text\\rag\\rag-kb\\models"
       }
     }
   }
 }
 ```
+
+> 与 stdio 同理：以上 `env` 必须显式给出（子进程不继承父进程环境）；离线/内网
+> 环境加 `"HF_HUB_OFFLINE": "1"`。包装器 `ragkb-mcp.cmd` 已内置这些变量。
 
 HTTP 版（若客户端支持远程 MCP）：
 
@@ -194,6 +238,9 @@ HTTP 版（若客户端支持远程 MCP）：
 }
 ```
 
+> HTTP 模式下 server 由你自己启动（`py -3.12 -m ragkb.mcp_server.server --transport http`），
+> 环境变量在你启动的 shell 里设置即可，无需在 JSON 里重复。
+
 ## 5. 快速验证接入是否成功
 
 ```powershell
@@ -205,7 +252,7 @@ py -3.12 scripts\verify_mcp_connection.py
 
 ```
 连接方式: stdio
-可用工具: ['search', 'retrieve_table', 'get_document', 'list_versions']
+可用工具: ['search', 'retrieve_table', 'get_document', 'list_versions', 'ingest_document']
 search('A-100 单价多少'):
   [demo.pdf] v1.0 (score 0.99): A-100 型号的单价为 99 元，保修期一年。
 ```

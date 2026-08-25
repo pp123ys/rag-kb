@@ -17,7 +17,12 @@ async def main():
         command="py",
         args=["-3.12", "-m", "ragkb.mcp_server.server", "--transport", "stdio"],
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        env={"HF_ENDPOINT": "https://hf-mirror.com"},
+        env={
+            "HF_ENDPOINT": "https://hf-mirror.com",
+            "HF_HOME": os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"),
+            "RAGKB_MODEL_CACHE_DIR": os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"),
+            # "HF_HUB_OFFLINE": "1",  # 离线/内网环境解除注释
+        },
     )
     print("连接方式: stdio")
     async with stdio_client(params) as (read, write):
