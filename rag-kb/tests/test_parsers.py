@@ -115,3 +115,76 @@ def test_parse_document_rejects_unsupported_extension(tmp_path):
     path.write_text("hello", encoding="utf-8")
     with pytest.raises(ValueError, match="不支持的文档类型"):
         parse_document(str(path), doc_id="d1", source="note.txt")
+
+
+# ---- Task 4: Excel 与邮件解析器 ----
+
+from email.message import EmailMessage
+
+from openpyxl import Workbook
+
+from ragkb.parsers.email_parser import EmailParser
+from ragkb.parsers.excel_parser import ExcelParser
+
+
+def _make_xlsx(path):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "报价"
+    ws.append(["型号", "单价"])
+    ws.append(["A-100", "99"])
+    wb.save(path)
+
+
+def _make_eml(path):
+    # 用 stdlib EmailMessage 生成真实格式的 .eml：Content-Type 带 charset，
+    # Subject 走 RFC 2047 编码——裸写 UTF-8 文本会被 stdlib 按 ASCII 解码
+    # 成 U+FFFD（无 charset 头时 get_content() 以 ascii+replace 解码）。
+    msg = EmailMessage()
+    msg["From"] = "a@x.com"
+    msg["To"] = "b@x.com"
+    msg["Subject"] = "报价更新"
+    msg.set_content("新单价见附件。")
+    path.write_bytes(msg.as_bytes())
+
+
+def test_excel_parser_keeps_row_column_structure(tmp_path):
+    path = tmp_path / "t.xlsx"
+    _make_xlsx(path)
+    result = ExcelParser().parse(str(path), doc_id="d2", source="t.xlsx")
+    assert result.doc_type == "excel"
+    assert result.tables[0].headers == ["型号", "单价"]
+    assert result.tables[0].rows == [["A-100", "99"]]
+    assert result.tables[0].source == "t.xlsx:报价"
+
+
+def test_email_parser_extracts_body(tmp_path):
+    path = tmp_path / "m.eml"
+    _make_eml(path)
+    result = EmailParser().parse(str(path), doc_id="d3", source="m.eml")
+    assert "新单价" in result.text
+
+
+def test_parse_document_routes_excel_and_email(tmp_path):
+    # 本任务补齐 base.parse_document 的 xlsx/eml 惰性导入分支：
+    # 分发结果 + 元数据透传。
+    xlsx = tmp_path / "t.xlsx"
+    _make_xlsx(xlsx)
+    eml = tmp_path / "m.eml"
+    _make_eml(eml)
+    excel = parse_document(str(xlsx), doc_id="d2", source="t.xlsx",
+                           department="质量部", version="v1",
+                           effective_date="2025-06-01")
+    email_doc = parse_document(str(eml), doc_id="d3", source="m.eml",
+                               department="市场部", version="v2",
+                               effective_date="2025-07-01")
+    assert excel.doc_type == "excel"
+    assert excel.tables[0].headers == ["型号", "单价"]
+    assert excel.department == "质量部"
+    assert excel.version == "v1"
+    assert excel.effective_date == "2025-06-01"
+    assert email_doc.doc_type == "email"
+    assert "新单价" in email_doc.text
+    assert email_doc.department == "市场部"
+    assert email_doc.version == "v2"
+    assert email_doc.effective_date == "2025-07-01"
