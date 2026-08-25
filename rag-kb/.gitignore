@@ -8,3 +8,6 @@ __pycache__/
 tests/fixtures/
 # 本地模型缓存（项目内，不入库）
 models/
+
+# �˵�����֤��ʱ���
+e2e_*.txt
