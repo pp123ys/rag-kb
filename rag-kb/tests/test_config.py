@@ -3,11 +3,15 @@ from ragkb.config import Settings
 
 
 def test_settings_from_env(monkeypatch):
-    monkeypatch.setenv("RAGKB_QDRANT_URL", "http://localhost:6333")
-    monkeypatch.setenv("RAGKB_EMBED_MODEL", "BAAI/bge-m3")
+    # 与默认值不同的覆盖，确保 env 覆盖真实生效
+    monkeypatch.setenv("RAGKB_QDRANT_URL", "http://env-host:9999")
+    monkeypatch.setenv("RAGKB_EMBED_MODEL", "fake/model")
+    # 无 RAGKB_ 前缀的环境变量应被忽略
+    monkeypatch.setenv("QDRANT_URL", "http://no-prefix:1111")
     s = Settings()
-    assert s.qdrant_url == "http://localhost:6333"
-    assert s.embed_model == "BAAI/bge-m3"
+    assert s.qdrant_url == "http://env-host:9999"
+    assert s.embed_model == "fake/model"
+    # 未覆盖的默认值仍然生效
     assert s.collection_name == "chunks"
 
 

@@ -41,4 +41,4 @@ markers = [
     "integration: 需要 docker compose 起外部服务",
     "model: 需要下载模型，默认跳过",
 ]
-addopts = "-m 'not model'"
+addopts = "-m 'not model and not integration'"
