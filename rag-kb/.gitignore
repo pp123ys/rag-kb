@@ -6,3 +6,5 @@ __pycache__/
 .env
 # 冒烟脚本生成的样例文档
 tests/fixtures/
+# 本地模型缓存（项目内，不入库）
+models/

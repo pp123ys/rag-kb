@@ -7,10 +7,11 @@ class Embedder:
     """BGE-M3 稠密向量封装（sentence-transformers）。"""
 
     def __init__(self, model_name: str = "BAAI/bge-m3",
-                 encoder=None, device: str = "cpu"):
+                 encoder=None, device: str = "cpu", cache_dir: str | None = None):
         self.model_name = model_name
         self._encoder = encoder  # 测试注入
         self._device = device
+        self._cache_dir = cache_dir  # 模型缓存目录（缺省走 HF 全局缓存）
         self._lock = threading.Lock()
         self._dim: int | None = None
 
@@ -20,7 +21,8 @@ class Embedder:
                 if self._encoder is None:  # double-checked locking
                     from sentence_transformers import SentenceTransformer
                     self._encoder = SentenceTransformer(
-                        self.model_name, device=self._device)
+                        self.model_name, device=self._device,
+                        cache_folder=self._cache_dir)
 
     def embed(self, texts: list[str]) -> np.ndarray:
         """批量嵌入，返回 (n, dim) float32；空输入返回 (0, dim)。"""

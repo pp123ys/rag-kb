@@ -28,7 +28,8 @@ class IngestPipeline:
         self._chunker = chunker or Chunker(
             settings.chunk_target_chars, settings.chunk_overlap_chars,
             settings.chunk_max_chars)
-        self._embedder = embedder or Embedder(settings.embed_model)
+        self._embedder = embedder or Embedder(
+            settings.embed_model, cache_dir=settings.model_cache_dir)
         self._indexer = indexer or QdrantIndexer(settings)
         self._ocr = ocr if ocr is not None else OCRClient(settings.ocr_lang)
         self._pg = pg or PgTableIndexer(settings.pg_dsn)

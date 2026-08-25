@@ -1,5 +1,10 @@
 from functools import lru_cache
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 项目根（src/ragkb/config.py → rag-kb/）
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
@@ -21,10 +26,11 @@ class Settings(BaseSettings):
     minio_secret_key: str = "ragkb-secret"
     minio_bucket: str = "ragkb-images"
 
-    # 模型
+    # 模型（下载与加载均走项目内目录，不占 C 盘用户缓存）
     embed_model: str = "BAAI/bge-m3"
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
     ocr_lang: str = "ch"
+    model_cache_dir: str = str(_PROJECT_ROOT / "models")
 
     # 切块
     chunk_target_chars: int = 400      # 中文按字符近似 token 预算

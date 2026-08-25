@@ -11,6 +11,11 @@
    跳过嵌入与向量入库，仅验证解析→清洗→切块→表格/图片/版本入库链路。）
 4. 启动 MCP：`python -m ragkb.mcp_server.server --transport stdio`（或 `--transport http`）
 
+### 模型存储位置
+
+嵌入（BGE-M3）与重排（bge-reranker）模型下载到**项目内 `models/` 目录**（不入 git），
+不占用 C 盘用户缓存。可通过环境变量 `RAGKB_MODEL_CACHE_DIR` 改到其他位置。
+
 ## MCP 工具
 
 | 工具 | 用途 |

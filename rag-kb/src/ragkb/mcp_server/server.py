@@ -58,7 +58,9 @@ class _QueryRouter:
                  indexer=None, version_store=None, minio=None, settings=None):
         self._settings = settings or get_settings()
         self._indexer = indexer or QdrantIndexer(self._settings)
-        self._embedder = embedder or Embedder(self._settings.embed_model)
+        self._embedder = embedder or Embedder(
+            self._settings.embed_model,
+            cache_dir=self._settings.model_cache_dir)
         self._pg = pg or PgTableIndexer(self._settings.pg_dsn)
         # 当前生效版本过滤（结果侧，PG document_versions 为权威）：
         # 注入默认 Retriever（检索链路内过滤），search 返回前再兜底执行一次
@@ -67,7 +69,8 @@ class _QueryRouter:
         # 默认链路接真实重排器（懒加载，零启动成本）；测试注入 retriever 时保持原样
         self._retriever = retriever or Retriever(
             indexer=self._indexer,
-            reranker=Reranker(self._settings.rerank_model),
+            reranker=Reranker(self._settings.rerank_model,
+                              cache_dir=self._settings.model_cache_dir),
             version_filter=self._version_filter,
         )
         self._version_store = version_store or VersionStore(self._pg)
