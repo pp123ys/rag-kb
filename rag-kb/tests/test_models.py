@@ -19,3 +19,27 @@ def test_chunk_carries_metadata():
     assert c.version == "v2.3"
     assert c.effective_date == "2026-01-15"
     assert c.table_id == "t1"
+
+
+def test_chunk_metadata_payload_contract():
+    c = Chunk(chunk_id="c1", doc_id="d1", doc_type="pdf", department="销售部",
+              version="v2.3", effective_date="2026-01-15", source="a.pdf:3",
+              text="……", table_id="t1", image_id="i1")
+    assert c.metadata() == {
+        "chunk_id": "c1",
+        "doc_id": "d1",
+        "doc_type": "pdf",
+        "source": "a.pdf:3",
+        "department": "销售部",
+        "version": "v2.3",
+        "effective_date": "2026-01-15",
+        "table_id": "t1",
+        "image_id": "i1",
+    }
+
+
+def test_chunk_metadata_defaults_none():
+    c = Chunk(chunk_id="c2", doc_id="d2", doc_type="pdf", source="b.pdf",
+              text="x")
+    assert c.metadata()["table_id"] is None
+    assert c.metadata()["image_id"] is None

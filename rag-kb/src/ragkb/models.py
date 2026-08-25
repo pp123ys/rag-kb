@@ -45,10 +45,12 @@ class Chunk:
     version: str = ""
     effective_date: str = ""
     table_id: str | None = None
+    image_id: str | None = None
 
     def metadata(self) -> dict:
         """Qdrant payload 用。"""
         return {
+            "chunk_id": self.chunk_id,
             "doc_id": self.doc_id,
             "doc_type": self.doc_type,
             "source": self.source,
@@ -56,4 +58,5 @@ class Chunk:
             "version": self.version,
             "effective_date": self.effective_date,
             "table_id": self.table_id,
+            "image_id": self.image_id,
         }
