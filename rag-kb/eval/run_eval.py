@@ -1,11 +1,11 @@
-"""离线检索评测入口（任务 17：评测集 + 指标，纯标准库）。
+"""离线检索评测入口：评测集 + 指标（Recall@K / MRR）。
 
 用法:
     py -3.12 eval/run_eval.py [eval_set.jsonl]
 
-当前为骨架：加载评测集并复用 ragkb.eval.metrics 中的 Recall@K / MRR；
-接入真实 retriever（对每条 query 取 top-K chunk ids 后与 gold 对比）
-是后续任务，metrics 与评测集格式为本任务的交付物。
+加载评测集，对每条 query 用真实检索链路（Qdrant 双路召回 + RRF，配置走
+get_settings）取 top-K chunk ids，与 gold（chunk id）对比计算 Recall@K 与 MRR。
+embedder 懒加载，首次运行会下载 BGE-M3 模型。
 """
 import json
 import sys
@@ -13,7 +13,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from ragkb.eval.metrics import mrr, recall_at_k  # noqa: E402
+from ragkb.config import get_settings
+from ragkb.embedder import Embedder
+from ragkb.eval.metrics import mrr, recall_at_k
+from ragkb.indexers import QdrantIndexer
+from ragkb.retriever import Retriever
 
 
 def load_set(path):
@@ -28,9 +32,23 @@ def load_set(path):
 
 def main():
     items = load_set(sys.argv[1] if len(sys.argv) > 1 else "eval/eval_set.jsonl")
-    # 实际评测：对每条 query 调 retriever，得到 ranked chunk ids，与 gold 对比。
-    # 骨架（接入 retriever 后填充）：
-    print(f"评测集共 {len(items)} 条；接入 retriever 后计算 Recall@K 与 MRR。")
+    settings = get_settings()
+    indexer = QdrantIndexer(settings)
+    embedder = Embedder(settings.embed_model)
+    retriever = Retriever(indexer=indexer)
+    ranked_lists, golds = [], []
+    for item in items:
+        query = item["query"]
+        gold = item["gold"][0]  # 单 gold 假设
+        query_vec = embedder.embed([query])[0].tolist()
+        hits = retriever.retrieve(query, query_vec, top_m=20)
+        ranked = [c.chunk_id for c in hits]
+        ranked_lists.append(ranked)
+        golds.append(gold)
+    print(f"评测集 {len(items)} 条")
+    for k in (5, 10):
+        print(f"Recall@{k}: {recall_at_k(ranked_lists, golds, k):.3f}")
+    print(f"MRR: {mrr(ranked_lists, golds):.3f}")
 
 
 if __name__ == "__main__":

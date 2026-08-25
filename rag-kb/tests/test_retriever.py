@@ -92,3 +92,69 @@ def test_retriever_skips_rerank_on_empty_fused():
                   version_filter=lambda hits: hits)
     results = r.retrieve(query="q", query_vec=[0.1], top_m=5)
     assert results == []
+
+
+class _DenseBoomIndexer:
+    """向量路必炸、关键词路正常：验证单路失败降级（§8）。"""
+
+    def __init__(self, keyword):
+        self._keyword = keyword
+
+    def search_dense(self, query_vec, top_k, must_not_versions=None):
+        raise RuntimeError("向量路故障")
+
+    def search_keyword(self, query, top_k, must_not_versions=None):
+        return self._keyword[:top_k]
+
+
+def test_retriever_degrades_when_dense_path_fails(caplog):
+    keyword = [_chunk("c1", "关键词命中")]
+    r = Retriever(indexer=_DenseBoomIndexer(keyword),
+                  reranker=None, version_filter=lambda hits: hits)
+    results = r.retrieve(query="q", query_vec=[0.1], top_m=5)
+    assert [c.chunk_id for c in results] == ["c1"]
+    assert any("向量路检索失败" in rec.message for rec in caplog.records)
+
+
+class _KeywordBoomIndexer(_DenseBoomIndexer):
+    def search_dense(self, query_vec, top_k, must_not_versions=None):
+        return self._keyword[:top_k]
+
+    def search_keyword(self, query, top_k, must_not_versions=None):
+        raise RuntimeError("关键词路故障")
+
+
+def test_retriever_degrades_when_keyword_path_fails(caplog):
+    dense = [_chunk("c1", "向量命中")]
+    r = Retriever(indexer=_KeywordBoomIndexer(dense),
+                  reranker=None, version_filter=lambda hits: hits)
+    results = r.retrieve(query="q", query_vec=[0.1], top_m=5)
+    assert [c.chunk_id for c in results] == ["c1"]
+    assert any("关键词路检索失败" in rec.message for rec in caplog.records)
+
+
+def test_retriever_degrades_to_empty_when_both_paths_fail():
+    class BothBoomIndexer(_DenseBoomIndexer):
+        def search_keyword(self, query, top_k, must_not_versions=None):
+            raise RuntimeError("关键词路故障")
+
+    r = Retriever(indexer=BothBoomIndexer([]),
+                  reranker=_NoEmptyReranker(),
+                  version_filter=lambda hits: hits)
+    # 两路都失败 → 空结果，且不触发 rerank（短路）
+    assert r.retrieve(query="q", query_vec=[0.1], top_m=5) == []
+
+
+def test_retriever_per_call_version_filter_overrides_constructor():
+    """调用级 version_filter 优先于构造注入的过滤（显式版本查询路径）。"""
+    dense = [_chunk("old", "旧版", version="v1.0", effective_date="2025-01-01"),
+             _chunk("new", "新版", version="v2.0", effective_date="2026-06-01")]
+    r = Retriever(
+        indexer=_FakeIndexer(dense),
+        reranker=None,
+        version_filter=lambda hits: [h for h in hits if h.version == "v2.0"],
+    )
+    results = r.retrieve(
+        query="x", query_vec=[0.1], top_m=5,
+        version_filter=lambda hits: [h for h in hits if h.version == "v1.0"])
+    assert [c.chunk_id for c in results] == ["old"]

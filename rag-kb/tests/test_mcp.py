@@ -18,7 +18,7 @@ class _FakeEmbedder:
 
 class _FakeRetriever:
     def retrieve(self, query, query_vec, top_k=50, top_n=20, top_m=5,
-                 must_not_versions=None):
+                 must_not_versions=None, **kwargs):
         return [Chunk(chunk_id="c1", doc_id="d1", doc_type="pdf",
                       source="a.pdf:3", text="产品型号 A-100 单价 99 元。",
                       version="v2.0", effective_date="2026-06-01")]
@@ -98,7 +98,7 @@ def test_retrieve_table_header_search():
 
 class _NoSourceRetriever:
     def retrieve(self, query, query_vec, top_k=50, top_n=20, top_m=5,
-                 must_not_versions=None):
+                 must_not_versions=None, **kwargs):
         return [Chunk(chunk_id="c9", doc_id="d9", doc_type="pdf",
                       source="", text="无来源内容",
                       version="v1.0", effective_date="2026-01-01")]
@@ -151,7 +151,7 @@ def test_current_version_filter_passes_chunks_without_version():
 
 class _TwoVersionRetriever:
     def retrieve(self, query, query_vec, top_k=50, top_n=20, top_m=5,
-                 must_not_versions=None):
+                 must_not_versions=None, **kwargs):
         return [
             Chunk(chunk_id="old", doc_id="d1", doc_type="pdf", source="a.pdf",
                   text="旧版内容", version="v1.0", effective_date="2025-01-01"),
@@ -173,3 +173,63 @@ def test_search_filters_old_versions():
     ids = [r["chunk_id"] for r in result["results"]]
     assert "old" not in ids
     assert "new" in ids
+
+
+def test_search_tool_exposes_version_param():
+    """MCP search 工具暴露 version 入参；department 为预留能力不暴露。"""
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder())
+    tool = server._tool_manager.get_tool("search")
+    assert "version" in tool.parameters["properties"]
+    assert "department" not in tool.parameters["properties"]
+
+
+def test_search_with_version_returns_only_that_version():
+    """显式版本查询：即使 PG 当前生效版本是 v2.0，version="v1.0" 也只返回 v1.0。"""
+    server = build_server(retriever=_TwoVersionRetriever(), pg=_VersionedPg(),
+                          embedder=_FakeEmbedder())
+    result = server._search("测试", top_k=3, version="v1.0")
+    ids = [r["chunk_id"] for r in result["results"]]
+    assert ids == ["old"]
+    assert all(r["version"] == "v1.0" for r in result["results"])
+
+
+class _FakeFetchIndexer:
+    """get_document 用的替身：fetch(chunk_id) 返回 Chunk 或 None。"""
+
+    def __init__(self, chunk=None):
+        self._chunk = chunk
+        self.calls = []
+
+    def fetch(self, chunk_id):
+        self.calls.append(chunk_id)
+        return self._chunk
+
+
+def test_get_document_returns_chunk_content():
+    chunk = Chunk(chunk_id="c1", doc_id="d1", doc_type="pdf", source="a.pdf:3",
+                  text="产品型号 A-100 单价 99 元。", version="v2.0",
+                  effective_date="2026-06-01")
+    indexer = _FakeFetchIndexer(chunk)
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder(), indexer=indexer)
+    out = server._get_document(chunk_id="c1")
+    assert indexer.calls == ["c1"]
+    assert out["text"] == "产品型号 A-100 单价 99 元。"
+    assert out["source"] == "a.pdf:3"
+
+
+def test_get_document_missing_chunk_returns_note():
+    indexer = _FakeFetchIndexer(None)
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder(), indexer=indexer)
+    out = server._get_document(chunk_id="nope")
+    assert out["chunk_id"] == "nope"
+    assert "note" in out
+
+
+def test_get_document_requires_chunk_or_image():
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder())
+    out = server._get_document()
+    assert "note" in out

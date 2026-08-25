@@ -171,6 +171,16 @@ class QdrantIndexer:
         ).points
         return self._to_hits(hits)
 
+    def fetch(self, chunk_id: str) -> Chunk | None:
+        """按 chunk_id 取回 chunk（点 ID 经 _point_id 映射，payload 含原文）。"""
+        self.ensure_collection()
+        points = self._client.retrieve(
+            self._collection, ids=[_point_id(chunk_id)],
+            with_payload=True)
+        if not points:
+            return None
+        return self._to_hits(points)[0]
+
     @staticmethod
     def _to_hits(hits):
         out = []

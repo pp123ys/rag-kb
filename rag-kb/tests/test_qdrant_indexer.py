@@ -61,6 +61,55 @@ def test_point_id_deterministic_and_qdrant_valid():
     assert _point_id(_cid(1)) == _cid(1)
 
 
+# ---------- fetch(chunk_id) 按点 ID 取回 ----------
+
+class _FakeRecord:
+    """模拟 qdrant-client 1.19 retrieve 返回的 Record（含 .id / .payload）。"""
+
+    def __init__(self, id, payload):
+        self.id = id
+        self.payload = payload
+
+
+class _FakeRetrieveClient:
+    def __init__(self, records):
+        self._records = records
+        self.calls = []
+
+    def collection_exists(self, name):
+        return True
+
+    def retrieve(self, collection, ids, with_payload=True):
+        self.calls.append((collection, list(ids), with_payload))
+        return self._records
+
+
+def test_fetch_returns_chunk_by_id(settings):
+    from ragkb.indexers.qdrant_indexer import _point_id
+    chunk_id = "d1-v1.0-0"
+    rec = _FakeRecord(_point_id(chunk_id), {
+        "chunk_id": chunk_id, "doc_id": "d1", "doc_type": "pdf",
+        "source": "a.pdf", "text": "原文内容", "department": "销售部",
+        "version": "v1.0", "effective_date": "2026-01-01",
+        "table_id": None, "image_id": None,
+    })
+    client = _FakeRetrieveClient([rec])
+    idx = QdrantIndexer(settings, client=client)
+    got = idx.fetch(chunk_id)
+    assert got is not None
+    assert got.chunk_id == chunk_id
+    assert got.text == "原文内容"
+    assert got.source == "a.pdf"
+    assert got.version == "v1.0"
+    # 点 ID 经 _point_id 映射，请求带 payload
+    assert client.calls == [("chunks", [_point_id(chunk_id)], True)]
+
+
+def test_fetch_missing_returns_none(settings):
+    idx = QdrantIndexer(settings, client=_FakeRetrieveClient([]))
+    assert idx.fetch("d1-v1.0-9") is None
+
+
 # ---------- 集成测试（需要本地 Qdrant，docker compose） ----------
 
 @pytest.mark.integration
@@ -162,3 +211,19 @@ def test_search_empty_collection(indexer):
     indexer.recreate()
     assert indexer.search_dense([0.1, 0.2], top_k=5) == []
     assert indexer.search_keyword("任意关键词", top_k=5) == []
+
+
+@pytest.mark.integration
+def test_fetch_round_trip(indexer):
+    """upsert 后按 chunk_id fetch 能取回原文与 source。"""
+    indexer.recreate()
+    chunk = Chunk(chunk_id=_cid(1), doc_id="d1", doc_type="pdf", source="a.pdf",
+                  text="取回原文测试", version="v1.0", effective_date="2026-01-01")
+    indexer.upsert([chunk], embeddings=[[0.1, 0.2]])
+    got = indexer.fetch(_cid(1))
+    assert got is not None
+    assert got.chunk_id == _cid(1)
+    assert got.text == "取回原文测试"
+    assert got.source == "a.pdf"
+    # 不存在的 chunk_id → None
+    assert indexer.fetch("d1-v9.9-999") is None

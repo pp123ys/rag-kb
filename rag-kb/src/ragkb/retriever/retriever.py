@@ -1,6 +1,10 @@
 # src/ragkb/retriever/retriever.py
+import logging
+
 from ragkb.models import Chunk
 from ragkb.retriever.rrf import rrf_merge
+
+logger = logging.getLogger(__name__)
 
 
 class Retriever:
@@ -14,11 +18,25 @@ class Retriever:
     def retrieve(self, query: str, query_vec: list[float],
                  top_k: int = 50, top_n: int = 20, top_m: int = 5,
                  must_not_versions: dict[str, str] | None = None,
-                 ) -> list[Chunk]:
-        dense_hits = self._indexer.search_dense(
-            query_vec, top_k, must_not_versions=must_not_versions)
-        keyword_hits = self._indexer.search_keyword(
-            query, top_k, must_not_versions=must_not_versions)
+                 version_filter=None) -> list[Chunk]:
+        """双路召回 → RRF 融合 → （可选重排）→ 版本过滤 → top_m。
+
+        单路召回失败时降级为另一路结果并记录告警（§8），不让一路故障
+        拖垮整个查询。version_filter 按调用覆盖构造注入的过滤
+        （如显式版本查询）；缺省沿用 self._version_filter。
+        """
+        try:
+            dense_hits = self._indexer.search_dense(
+                query_vec, top_k, must_not_versions=must_not_versions)
+        except Exception:
+            logger.warning("向量路检索失败，降级为仅关键词路", exc_info=True)
+            dense_hits = []
+        try:
+            keyword_hits = self._indexer.search_keyword(
+                query, top_k, must_not_versions=must_not_versions)
+        except Exception:
+            logger.warning("关键词路检索失败，降级为仅向量路", exc_info=True)
+            keyword_hits = []
 
         # RRF：用 chunk_id 融合，再还原 Chunk
         id_to_chunk = {c.chunk_id: c for c in [*dense_hits, *keyword_hits]}
@@ -35,8 +53,10 @@ class Retriever:
         if self._reranker is not None:
             fused = self._reranker.rerank(query, fused)
 
-        # 版本过滤（可选）
-        if self._version_filter is not None:
+        # 版本过滤（可选）：调用级 version_filter 优先，缺省用构造注入的过滤
+        if version_filter is not None:
+            fused = version_filter(fused)
+        elif self._version_filter is not None:
             fused = self._version_filter(fused)
 
         return fused[:top_m]

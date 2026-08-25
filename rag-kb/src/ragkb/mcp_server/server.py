@@ -76,13 +76,25 @@ class _QueryRouter:
     def search(self, query: str, top_k: int = 5,
                version: str | None = None,
                department: str | None = None) -> dict:
-        """双路召回 + RRF + 重排 + 当前生效版本过滤，返回带出处上下文。权限过滤为预留能力。"""
+        """双路召回 + RRF + 重排 + 版本过滤，返回带出处上下文。权限过滤为预留能力。
+
+        version 指定版本号时只返回该版本的 chunk（历史版本查询，跳过
+        当前生效版本闸门）；缺省时只返回当前生效版本（PG document_versions
+        为权威）。
+        """
         query_vec = self._embedder.embed([query])[0].tolist()
-        # 关键字传参：兼容测试替身（**kw）与真实 Retriever 签名
+        if version:
+            # 显式版本查询：过滤只保留目标版本，不查 PG 当前生效版本
+            vfilter = lambda chunks: [c for c in chunks if c.version == version]
+        else:
+            vfilter = self._version_filter
+        # 关键字传参：兼容测试替身（**kw）与真实 Retriever 签名；
+        # version_filter 按调用覆盖 Retriever 构造注入的默认过滤
         chunks = self._retriever.retrieve(query=query, query_vec=query_vec,
-                                          top_m=top_k)
-        # 当前生效版本过滤：只返回 PG document_versions 中生效日期最新的版本内容
-        chunks = self._version_filter(chunks)
+                                          top_m=top_k, version_filter=vfilter)
+        # 结果侧再兜底执行同一版本闸门（覆盖测试注入的自定义 retriever 场景，
+        # 保证任何检索器结果都过版本闸门）
+        chunks = vfilter(chunks)
         if not chunks:
             return {"results": [], "empty_reason": "no_hits"}
         # 防幻觉硬保证（§6.1.1）：无来源的 chunk 一律不返回
@@ -108,12 +120,18 @@ class _QueryRouter:
         return {"rows": [], "tables": []}
 
     def get_document(self, chunk_id: str = "", image_id: str = "") -> dict:
-        """取回原文块或图片原图。图片经 MinIO 取回，返回 base64 数据。"""
+        """取回原文块或图片原图。原文经 Qdrant payload 取回，图片经 MinIO 返回 base64。"""
         if image_id:
             data = self._minio.get(image_id)
             return {"image_id": image_id,
                     "data_base64": base64.b64encode(data).decode("ascii")}
-        return {"chunk_id": chunk_id, "note": "原文块经 search 结果的 source 定位"}
+        if chunk_id:
+            chunk = self._indexer.fetch(chunk_id)
+            if chunk:
+                return {"chunk_id": chunk_id, "text": chunk.text,
+                        "source": chunk.source}
+            return {"chunk_id": chunk_id, "note": "未找到该 chunk"}
+        return {"note": "需提供 chunk_id 或 image_id"}
 
     def list_versions(self, doc_id: str) -> dict:
         return {"versions": self._version_store.versions(doc_id)}
@@ -129,9 +147,12 @@ def build_server(retriever=None, pg=None, embedder=None, indexer=None,
     mcp = FastMCP("ragkb")
 
     @mcp.tool()
-    def search(query: str, top_k: int = 5) -> dict:
-        """检索知识库，返回带出处标注的上下文。只返回真实检索结果。"""
-        return router.search(query, top_k=top_k)
+    def search(query: str, top_k: int = 5, version: str | None = None) -> dict:
+        """检索知识库，返回带出处标注的上下文。只返回真实检索结果。
+
+        version 指定版本号时查该版本；缺省时只返回当前生效版本。
+        """
+        return router.search(query, top_k=top_k, version=version)
 
     @mcp.tool()
     def retrieve_table(table_id: str = "", query: str | None = None) -> dict:
