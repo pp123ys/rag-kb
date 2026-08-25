@@ -1,4 +1,6 @@
-import fitz
+# 用 pymupdf 官方入口名而非 fitz：PyMuPDF>=1.24 的 fitz 是别名模块，
+# import fitz 会 print 弃用警告到 stdout —— 在 MCP stdio 传输下污染 JSON-RPC 流
+import pymupdf as fitz  # noqa: N813  与 fitz API 完全一致
 import pdfplumber
 
 from ragkb.models import ImageData, ParsedDocument, TableData

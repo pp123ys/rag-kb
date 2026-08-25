@@ -53,7 +53,8 @@ class _QueryRouter:
     """把 MCP 工具请求路由到检索组件（可注入替身供测试）。"""
 
     def __init__(self, retriever=None, pg=None, embedder=None,
-                 indexer=None, version_store=None, minio=None, settings=None):
+                 indexer=None, version_store=None, minio=None, settings=None,
+                 ingest_pipeline=None):
         self._settings = settings or get_settings()
         self._indexer = indexer or QdrantIndexer(self._settings)
         self._embedder = embedder or Embedder(
@@ -73,6 +74,33 @@ class _QueryRouter:
         )
         self._version_store = version_store or VersionStore(self._pg)
         self._minio = minio if minio is not None else get_image_store(self._settings)
+        # 入库流水线懒加载：构造即加载嵌入模型（~2GB 内存），MCP 启动不应触发；
+        # 首次 ingest_document 调用时才构建，并复用本 router 的存储/嵌入实例
+        self._ingest_pipeline = ingest_pipeline
+
+    def ingest(self, path: str, source: str = "", department: str = "",
+               version: str = "", effective_date: str = "",
+               skip_embed: bool = False) -> dict:
+        """入库文档：解析 → 清洗 → 切块 → 嵌入 → 向量/表格/图片入库。
+
+        path 为 MCP server 所在机器的文件路径。返回 {doc_id, chunks, tables}；
+        skip_embed=True 时跳过嵌入与向量入库（无模型下载环境的降级验证）。
+        """
+        if self._ingest_pipeline is None:
+            from ragkb.pipeline.ingest import IngestPipeline
+            # 复用本 router 的存储/嵌入实例：同一嵌入式 Qdrant client、
+            # 同一表格/图片存储、同一模型实例，保证入库后立即可检索
+            self._ingest_pipeline = IngestPipeline(
+                settings=self._settings,
+                indexer=self._indexer,
+                pg=self._pg,
+                minio=self._minio,
+                embedder=self._embedder,
+            )
+        return self._ingest_pipeline.ingest(
+            path, source=source or None, department=department,
+            version=version, effective_date=effective_date,
+            skip_embed=skip_embed)
 
     def search(self, query: str, top_k: int = 5,
                version: str | None = None,
@@ -147,11 +175,13 @@ class _QueryRouter:
 
 
 def build_server(retriever=None, pg=None, embedder=None, indexer=None,
-                 version_store=None, minio=None, settings=None):
-    """构造 FastMCP 服务，注册四个工具。"""
+                 version_store=None, minio=None, settings=None,
+                 ingest_pipeline=None):
+    """构造 FastMCP 服务，注册五个工具（检索 + 入库）。"""
     router = _QueryRouter(retriever=retriever, pg=pg, embedder=embedder,
                           indexer=indexer, version_store=version_store,
-                          minio=minio, settings=settings)
+                          minio=minio, settings=settings,
+                          ingest_pipeline=ingest_pipeline)
 
     mcp = FastMCP("ragkb")
 
@@ -178,11 +208,28 @@ def build_server(retriever=None, pg=None, embedder=None, indexer=None,
         """查询文档版本历史。"""
         return router.list_versions(doc_id)
 
+    @mcp.tool()
+    def ingest_document(path: str, source: str = "", department: str = "",
+                        version: str = "", effective_date: str = "",
+                        skip_embed: bool = False) -> dict:
+        """入库文档：解析→清洗→切块→嵌入→向量/表格/图片入库。
+
+        path 为 MCP server 所在机器的文件路径（绝对或相对 rag-kb 工作目录）。
+        source 缺省取文件名；version/effective_date 建议一并提供（参与版本过滤与历史）。
+        skip_embed=True 跳过嵌入与向量入库（无模型下载环境的降级验证）。
+        返回 {doc_id, chunks, tables}；文档不存在或解析失败时抛错。
+        """
+        return router.ingest(
+            path, source=source, department=department,
+            version=version, effective_date=effective_date,
+            skip_embed=skip_embed)
+
     # 供测试直接调用工具逻辑
     mcp._search = router.search
     mcp._retrieve_table = router.retrieve_table
     mcp._get_document = router.get_document
     mcp._list_versions = router.list_versions
+    mcp._ingest = router.ingest
     return mcp
 
 
@@ -193,6 +240,14 @@ _TRANSPORT = {"stdio": "stdio", "http": "streamable-http"}
 
 def main():
     logging.basicConfig(level=logging.INFO)
+    # 预热重依赖：sentence_transformers → sklearn → scipy 的 C 扩展（OpenBLAS DLL）
+    # 在 asyncio event loop 线程内首次导入曾出现卡死（MCP 同步工具直接在
+    # event loop 线程执行，见 py-spy 栈：scipy.linalg.blas create_module 挂起）。
+    # 提前在主线程完成导入，保证首次工具调用只做模型加载、不做重型 import。
+    try:
+        import sentence_transformers  # noqa: F401  （连带 sklearn/scipy 等）
+    except Exception as exc:
+        logger.warning("sentence_transformers 预热失败，首次工具调用可能变慢: %s", exc)
     ap = argparse.ArgumentParser(description="RAG 知识库 MCP Server")
     ap.add_argument("--transport", default="stdio",
                     choices=["stdio", "http", "both"])

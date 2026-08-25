@@ -278,3 +278,53 @@ def test_get_document_requires_chunk_or_image():
                           embedder=_FakeEmbedder())
     out = server._get_document()
     assert "note" in out
+
+
+class _FakeIngestPipeline:
+    """入库流水线替身：记录入参并返回固定统计，避免触发真实 Embedder 模型加载。"""
+
+    def __init__(self):
+        self.calls = []
+
+    def ingest(self, path, doc_id=None, source=None, department="", version="",
+               effective_date="", parse_images=True, skip_embed=False):
+        self.calls.append({
+            "path": path, "doc_id": doc_id, "source": source,
+            "department": department, "version": version,
+            "effective_date": effective_date, "skip_embed": skip_embed,
+        })
+        return {"doc_id": doc_id or "gen-1", "chunks": 3, "tables": 1}
+
+
+def test_ingest_document_routes_to_pipeline():
+    pipe = _FakeIngestPipeline()
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder(), ingest_pipeline=pipe)
+    out = server._ingest("d:/docs/报价单.pdf", source="报价单.pdf",
+                         department="销售部", version="v1.0",
+                         effective_date="2026-01-15")
+    assert pipe.calls == [{
+        "path": "d:/docs/报价单.pdf", "doc_id": None, "source": "报价单.pdf",
+        "department": "销售部", "version": "v1.0",
+        "effective_date": "2026-01-15", "skip_embed": False,
+    }]
+    assert out == {"doc_id": "gen-1", "chunks": 3, "tables": 1}
+
+
+def test_ingest_document_skip_embed_and_defaults():
+    pipe = _FakeIngestPipeline()
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder(), ingest_pipeline=pipe)
+    out = server._ingest("a.pdf", skip_embed=True)
+    assert pipe.calls[0]["skip_embed"] is True
+    assert pipe.calls[0]["source"] is None  # 缺省 source 由 pipeline 取文件名
+    assert out["doc_id"] == "gen-1"
+
+
+def test_ingest_document_tool_registered():
+    server = build_server(retriever=_FakeRetriever(), pg=_FakePg(),
+                          embedder=_FakeEmbedder())
+    tool = server._tool_manager.get_tool("ingest_document")
+    assert tool is not None
+    props = tool.parameters["properties"]
+    assert "path" in props and "skip_embed" in props
