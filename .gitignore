@@ -1,0 +1,23 @@
+# ---- Python / tooling ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# ---- Environment / secrets ----
+.env
+.env.*
+
+# ---- Runtime data & local models (sensitive, do NOT publish) ----
+data/
+models/
+
+# ---- Customer quotation originals (sensitive, do NOT publish) ----
+报价_原始文件/
+
+# ---- Local scratch / probe artifacts ----
+e2e_*.txt
+mcp_verify.txt
+perf_probe.txt
+search_probe.txt

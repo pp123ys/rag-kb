@@ -1,3 +1,2 @@
-from ragkb.mcp_server.server import build_server, main
-
-__all__ = ["build_server", "main"]
+"""RAG KB MCP Server module."""
+# Import is deferred to avoid circular import warning when running with `python -m`

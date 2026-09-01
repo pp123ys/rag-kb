@@ -1,6 +1,7 @@
 import argparse
 import base64
 import logging
+import os
 
 from mcp.server.fastmcp import FastMCP
 
@@ -65,11 +66,13 @@ class _QueryRouter:
         # 注入默认 Retriever（检索链路内过滤），search 返回前再兜底执行一次
         # （覆盖测试注入的自定义 retriever 场景，保证任何检索器结果都过版本闸门）
         self._version_filter = CurrentVersionFilter(self._pg)
-        # 默认链路接真实重排器（懒加载，零启动成本）；测试注入 retriever 时保持原样
+        # 默认链路接真实重排器（懒加载，零启动成本）；测试注入 retriever 时保持原样。
+        # 重排器实例单独持有引用，供 warmup() 启动预热（避免首查冷加载超时）
+        self._reranker = Reranker(self._settings.rerank_model,
+                                  cache_dir=self._settings.model_cache_dir)
         self._retriever = retriever or Retriever(
             indexer=self._indexer,
-            reranker=Reranker(self._settings.rerank_model,
-                              cache_dir=self._settings.model_cache_dir),
+            reranker=self._reranker,
             version_filter=self._version_filter,
         )
         self._version_store = version_store or VersionStore(self._pg)
@@ -77,6 +80,25 @@ class _QueryRouter:
         # 入库流水线懒加载：构造即加载嵌入模型（~2GB 内存），MCP 启动不应触发；
         # 首次 ingest_document 调用时才构建，并复用本 router 的存储/嵌入实例
         self._ingest_pipeline = ingest_pipeline
+
+    def warmup(self):
+        """启动预热：把嵌入与重排模型加载进内存。
+
+        HTTP 共享实例只付一次冷启动代价，首个 search 不再被模型加载拖到超时
+        （实测：无 HF_HUB_OFFLINE 时联网探测重试，单个重排模型冷加载可达
+        391s；离线加载两个模型合计约 30s）。stdio 场景同样受益：首查即快。
+        测试注入替身（embedder/retriever）时各组件为假对象，跳过加载。
+        """
+        import time
+        t0 = time.monotonic()
+        # 仅当是真实组件时才加载（测试注入的替身对象没有模型可加载）
+        if isinstance(self._embedder, Embedder):
+            logger.info("预热嵌入模型 %s ...", self._settings.embed_model)
+            self._embedder._ensure()
+        if isinstance(self._reranker, Reranker):
+            logger.info("预热重排模型 %s ...", self._settings.rerank_model)
+            self._reranker._ensure()
+        logger.info("模型预热完成，耗时 %.1fs", time.monotonic() - t0)
 
     def ingest(self, path: str, source: str = "", department: str = "",
                version: str = "", effective_date: str = "",
@@ -259,6 +281,7 @@ def build_server(retriever=None, pg=None, embedder=None, indexer=None,
     mcp._list_versions = router.list_versions
     mcp._delete = router.delete
     mcp._ingest = router.ingest
+    mcp._warmup = router.warmup
     return mcp
 
 
@@ -288,10 +311,18 @@ def main():
 
     mcp = build_server(host=args.host, port=args.port)
 
+    # 启动预热：模型常驻内存，首个 search 不再被冷加载拖到超时
+    # （冷加载若遇 HF 联网探测超时重试，实测可达 6 分钟+；离线加载约 30s）。
+    # 无模型/测试环境可设 RAGKB_SKIP_PRELOAD=1 跳过（首查退回懒加载）。
+    if os.environ.get("RAGKB_SKIP_PRELOAD") != "1":
+        mcp._warmup()
+
     if args.transport == "both":
         # both：分别拉起两个实例（stdio 前台 + http 后台）
         import threading
         http = build_server(host=args.host, port=args.port)
+        if os.environ.get("RAGKB_SKIP_PRELOAD") != "1":
+            http._warmup()
         threading.Thread(target=http.run,
                          kwargs={"transport": _TRANSPORT["http"]},
                          daemon=True).start()
