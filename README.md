@@ -23,6 +23,50 @@
 | `list_versions` | 文档版本历史 |
 | `delete_document` | 删除文档（向量 + 表格/版本 + 原图，幂等） |
 
+## 新手快速开始（Windows，零基础版）
+
+> 下面说明按「电脑上什么都没装」的情况写，跟着做就能跑起来。
+> 完整设计与使用说明见 [rag-kb/README.md](rag-kb/README.md)。
+
+### 需要安装的（就 2 样）
+
+1. **Python 3.12** — 从 [python.org](https://www.python.org/downloads/) 下载 64 位安装包。
+   ⚠️ 安装时**一定勾选 "Add Python to PATH"**（新手最容易漏的一步，漏了后面命令都跑不了）。
+2. **Git** — 用于克隆/更新代码（运行项目本身用不到，有就跳过，没有也别慌）。
+
+**不需要装**：Docker（默认嵌入式模式零外部服务）、GPU / CUDA（CPU 即可，较慢）、模型（首次入库时自动下载，约 2GB）。
+
+### 操作步骤
+
+```powershell
+cd D:\text\rag\rag-kb
+
+# 1. 创建虚拟环境（隔离依赖，建议新手也做）
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+# 若报"禁止运行脚本"错误，先执行一次：
+# Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# 2. 安装项目依赖（会下载一批库，PaddleOCR/paddle 较大，需几分钟）
+pip install -e ".[dev]"
+
+# 3. 首次入库一个文档（首次会自动下载 ~2GB BGE-M3 模型，请耐心等待）
+python -m ragkb.pipeline.ingest 你的文档.pdf --department 销售部 --version v1.0 --effective-date 2026-01-15
+# 不想等模型下载，可加 --skip-embed 跳过嵌入、仅验证解析链路
+
+# 4. 启动 MCP 服务
+python -m ragkb.mcp_server.server --transport http
+# 成功后监听 http://127.0.0.1:8000/mcp
+```
+
+### 常见坑
+
+- **PowerShell 提示"无法加载脚本"** → 执行上面的 `Set-ExecutionPolicy`，或跳过 `.venv` 直接 `pip install`（不推荐但能跑）。
+- **`pip install` 慢/卡在 paddle** → 该包体积大属正常；可加清华镜像：`pip install -e ".[dev]" -i https://pypi.tuna.tsinghua.edu.cn/simple`。
+- **模型下载慢/失败** → 加 `--skip-embed` 跳过；已下载后可设 `HF_HUB_OFFLINE=1` 强制离线加载。
+- **项目没有网页界面** → 它是 MCP 服务而非网站，需要接一个 MCP 客户端（如 Claude Desktop / 支持 MCP 的 agent 工具）才能真正调用 `search`、`ingest_document` 等工具。
+- **想快速验证环境** → 直接跑自带冒烟脚本：`powershell -ExecutionPolicy Bypass -File scripts\smoke.ps1`。
+
 ## 部署
 
 - **嵌入式（默认，免 Docker）**：Qdrant 本地目录 + SQLite + 本地图片存储，零外部服务
